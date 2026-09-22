@@ -16,7 +16,7 @@ Paycryt is payments software. Please treat security reports seriously and privat
 ## Known gaps (alpha)
 
 - The reference server is in-memory and has a single shared API key. It is a starting point, not a hardened service.
-- Only one real chain adapter exists (Tron/TRC20 via TronGrid), and it is experimental: verified against live TronGrid responses and a reference address-derivation library, but not yet run against a real, money-moving deposit end to end. EVM and Bitcoin have no adapter yet. The fake chain must never be used to decide real payments.
+- Two real chain adapters exist (Tron/TRC20 via TronGrid, and EVM chains via JSON-RPC), and both are experimental. The EVM adapter has been checked live against Ethereum mainnet with no mocking (real deposits found, real confirmations computed); the Tron one is verified against live TronGrid responses and a reference address-derivation library. Neither has been run through a full create-payment-and-get-paid flow end to end. Bitcoin has no adapter yet. The fake chain must never be used to decide real payments.
 - Bank/mobile-money adapters are experimental and unverified against live providers.
 - Late deposits to already-finalised addresses are not detected (see docs/payment-policies.md).
 

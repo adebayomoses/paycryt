@@ -11,10 +11,10 @@ Status legend: ✅ done · 🚧 next · 💡 idea
 - ✅ Settlement/collection interfaces; experimental Paystack + Flutterwave adapters
 - ✅ EVM xpub address derivation (checked against known test vectors)
 - ✅ **Tron (TRC20 USDT) support:** `TronXpubDeriver` (address encoding checked byte-for-byte against `tronweb`) and `TronGridChainAdapter`, a real chain watcher against the live TronGrid API. See [docs/tron.md](docs/tron.md). Not yet run against a real, money-moving deposit end to end — test on Shasta/Nile testnet or with small amounts first.
+- ✅ **EVM chain support:** `EvmRpcChainAdapter`, a real JSON-RPC chain watcher (ERC-20 `Transfer` logs via `eth_getLogs`, real block-based confirmations). Verified live against Ethereum mainnet — found 173 real USDT deposits to a real address with no mocking. See [docs/evm.md](docs/evm.md). No payment has been created and paid through the full flow end to end yet.
 
 ## v0.2: make it usable for real
-- 🚧 **More real chain adapters:** EVM JSON-RPC (ERC-20 `Transfer` logs), Bitcoin
-- 🚧 Bitcoin address deriver (zpub)
+- 🚧 **Bitcoin support:** chain adapter and a zpub address deriver
 - 🚧 A real block-confirmation count for Tron (TronGrid's transfer endpoint only exposes solidified/not; see [docs/tron.md](docs/tron.md#confirmations))
 - 🚧 `SqliteStore` and `IndexedDbStore` for `KVStore`; a persistent `PaymentStore` so the server survives restarts
 - 🚧 Late-watch window: keep polling finalised addresses for stray deposits
