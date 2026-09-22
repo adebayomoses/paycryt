@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ASSETS, FakeChain, MemoryStore, OfflinePOS, toJson, verifyChain, type RateSnapshot, type SyncOp, type SyncResponse } from '@paycryt/core';
+import { ASSETS, FakeChain, MemoryStore, OfflinePOS, toJson, verifyChain, type KVStore, type RateSnapshot, type SyncOp, type SyncResponse } from '@paycryt/core';
+import { SqliteStore } from '@paycryt/adapters';
 import { PaycrytServer } from '@paycryt/server';
 
 let server: PaycrytServer;
@@ -16,7 +20,7 @@ async function api(method: string, path: string, body?: unknown, key = KEY) {
 }
 
 beforeEach(async () => {
-  server = new PaycrytServer({ apiKey: KEY, sandbox: true, spreadBps: 100 });
+  server = await PaycrytServer.create({ apiKey: KEY, sandbox: true, spreadBps: 100 });
   base = `http://127.0.0.1:${await server.listen(0)}`;
 });
 afterEach(() => server.close());
@@ -99,10 +103,101 @@ describe('reference server + sandbox', () => {
   });
 
   it('sandbox can be disabled', async () => {
-    const prod = new PaycrytServer({ apiKey: KEY, sandbox: false });
+    const prod = await PaycrytServer.create({ apiKey: KEY, sandbox: false });
     const url = `http://127.0.0.1:${await prod.listen(0)}`;
     const res = await fetch(`${url}/v1/sandbox/mine`, { method: 'POST', headers: { authorization: `Bearer ${KEY}` }, body: '{}' });
     expect(res.status).toBe(404);
     await prod.close();
+  });
+});
+
+describe('persistence: survives a restart when a store is configured', () => {
+  async function boot(store: KVStore) {
+    const s = await PaycrytServer.create({ apiKey: KEY, sandbox: true, spreadBps: 100, store });
+    const url = `http://127.0.0.1:${await s.listen(0)}`;
+    return { server: s, url };
+  }
+  const call = (url: string, method: string, path: string, body?: unknown) =>
+    fetch(url + path, { method, headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }).then(
+      async (res) => ({ status: res.status, body: (await res.json()) as any }),
+    );
+
+  it('reloads an in-flight payment, its rate snapshot and its lease after a restart (MemoryStore)', async () => {
+    const store = new MemoryStore();
+    const first = await boot(store);
+
+    const created = await call(first.url, 'POST', '/v1/payments', { amount: '15000', currency: 'NGN', asset: 'USDT_TRC20' });
+    expect(created.status).toBe(201);
+    const lease = await call(first.url, 'POST', '/v1/leases', { deviceId: 'till-9', size: 10 });
+    expect(lease.body).toEqual({ start: 1_000_000, end: 1_000_010 }); // right after the server's own 1,000,000-slot range
+    await first.server.close();
+
+    // "restart": a brand-new server instance, same underlying store, nothing carried over in memory.
+    const second = await boot(store);
+
+    const reloaded = await call(second.url, 'GET', `/v1/payments/${created.body.id}`);
+    expect(reloaded.body).toMatchObject({ id: created.body.id, status: 'awaiting_payment', address: created.body.address, amountDue: created.body.amountDue });
+
+    const snap = await call(second.url, 'GET', `/v1/audit/rates/${created.body.rateSnapshotHash}`);
+    expect(snap.status).toBe(200);
+    const audit = await call(second.url, 'GET', '/v1/audit/rates');
+    expect(audit.body.verification).toEqual({ ok: true });
+
+    // The lease survived too: a fresh allocation for the same device returns the SAME range, not a new one.
+    const leaseAgain = await call(second.url, 'POST', '/v1/leases', { deviceId: 'till-9', size: 10 });
+    expect(leaseAgain.body).toEqual(lease.body);
+    // And a brand-new device is not handed an overlapping range.
+    const newDeviceLease = await call(second.url, 'POST', '/v1/leases', { deviceId: 'till-new', size: 10 });
+    expect(newDeviceLease.body.start).toBeGreaterThanOrEqual(1_000_010);
+
+    // The reloaded payment can still be paid and settled after the restart.
+    await call(second.url, 'POST', '/v1/sandbox/deposit', { paymentId: created.body.id, scenario: 'exact' });
+    const paid = await call(second.url, 'GET', `/v1/payments/${created.body.id}`);
+    expect(paid.body.status).toBe('paid');
+
+    await first.server.close();
+    await second.server.close();
+  });
+
+  it('does not reissue an already-used server address index after a restart', async () => {
+    const store = new MemoryStore();
+    const first = await boot(store);
+    const a = await call(first.url, 'POST', '/v1/payments', { amount: '15000', currency: 'NGN', asset: 'USDT_TRC20' });
+    await first.server.close();
+
+    const second = await boot(store);
+    const b = await call(second.url, 'POST', '/v1/payments', { amount: '15000', currency: 'NGN', asset: 'USDT_TRC20' });
+    expect(b.body.address).not.toBe(a.body.address);
+    await second.server.close();
+  });
+
+  it('runs fully in-memory as before when no store is configured (no behaviour change)', async () => {
+    const noStore = await PaycrytServer.create({ apiKey: KEY, sandbox: true });
+    const u = `http://127.0.0.1:${await noStore.listen(0)}`;
+    const created = await call(u, 'POST', '/v1/payments', { amount: '15000', currency: 'NGN', asset: 'USDT_TRC20' });
+    expect(created.status).toBe(201);
+    await noStore.close();
+  });
+
+  it('survives a real restart against a real SQLite file, not just MemoryStore', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'paycryt-server-sqlite-'));
+    const path = join(dir, 'paycryt.sqlite');
+    try {
+      const dbA = new SqliteStore(path);
+      const first = await boot(dbA);
+      const created = await call(first.url, 'POST', '/v1/payments', { amount: '15000', currency: 'NGN', asset: 'USDT_TRC20' });
+      await first.server.close();
+      dbA.close();
+
+      const dbB = new SqliteStore(path); // a genuinely separate SqliteStore instance over the same file
+      const second = await boot(dbB);
+      const reloaded = await call(second.url, 'GET', `/v1/payments/${created.body.id}`);
+      expect(reloaded.body.status).toBe('awaiting_payment');
+      expect(reloaded.body.amountDue).toBe(created.body.amountDue);
+      await second.server.close();
+      dbB.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

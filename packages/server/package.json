@@ -8,5 +8,5 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist"],
-  "dependencies": { "@paycryt/core": "^0.1.0" }
+  "dependencies": { "@paycryt/core": "^0.1.0", "@paycryt/adapters": "^0.1.0" }
 }

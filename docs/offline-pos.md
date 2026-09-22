@@ -50,10 +50,10 @@ A compromised or buggy device cannot get a bad request accepted:
 
 ## Storage
 
-`KVStore` is a four-method interface. `MemoryStore` is for tests; in production implement it over SQLite, IndexedDB or AsyncStorage. Values are serialised with `toJson`/`fromJson`, which preserve `bigint`.
+`KVStore` is a four-method interface. `MemoryStore` is for tests; `SqliteStore` (in `@paycryt/adapters`, backed by Node's built-in `node:sqlite`) is a real backend for a Node-based till. On mobile or in a browser, implement it over IndexedDB or AsyncStorage. Values are serialised with `toJson`/`fromJson`, which preserve `bigint`. See [docs/persistence.md](persistence.md).
 
 ## Limitations (alpha)
 
-- Address derivers exist for **EVM** chains (`EvmXpubDeriver`). Tron and Bitcoin derivers are on the [roadmap](../ROADMAP.md); until then use the fake chain or add your own `AddressDeriver`.
+- Address derivers exist for **EVM**, **Tron** and **Bitcoin** (`EvmXpubDeriver`, `TronXpubDeriver`, `BtcXpubDeriver`) — see [docs/evm.md](evm.md), [docs/tron.md](tron.md), [docs/bitcoin.md](bitcoin.md).
 - The cashier still needs some way to learn a payment landed (a phone with data, or waiting for sync). Offline mode makes *taking* the order robust; it cannot make an unseen chain visible.
 - Rejected ops are kept in `pos.rejected()`. Show them to the cashier: the customer may already have paid an address the server refused.

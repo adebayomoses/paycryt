@@ -4,6 +4,12 @@ import { verifyChain } from '../rates/snapshot.js';
 import type { AddressDeriver } from '../wallet/derive.js';
 import type { SyncOp, SyncResponse } from './pos.js';
 
+/** Plain-data snapshot of a LeaseRegistry's state, safe to hand to `KVStore.set` and back. */
+export interface LeaseRegistrySnapshot {
+  cursor: number;
+  ranges: Record<string, Array<{ start: number; end: number }>>;
+}
+
 /** Hands out disjoint address-index ranges so two POS devices can never generate the same address. */
 export class LeaseRegistry {
   private readonly ranges = new Map<string, Array<{ start: number; end: number }>>();
@@ -28,6 +34,18 @@ export class LeaseRegistry {
 
   contains(deviceId: string, index: number): boolean {
     return (this.ranges.get(deviceId) ?? []).some((l) => index >= l.start && index < l.end);
+  }
+
+  /** Plain-data copy of all state, for persistence (see `LeaseRegistryStore` in @paycryt/core). */
+  snapshot(): LeaseRegistrySnapshot {
+    return { cursor: this.cursor, ranges: Object.fromEntries(this.ranges) };
+  }
+
+  /** Rebuild a registry from a previously saved `snapshot()`, so restarting a server doesn't reissue addresses. */
+  static fromSnapshot(snapshot: LeaseRegistrySnapshot): LeaseRegistry {
+    const registry = new LeaseRegistry({ firstIndex: snapshot.cursor });
+    for (const [deviceId, ranges] of Object.entries(snapshot.ranges)) registry.ranges.set(deviceId, ranges.map((r) => ({ ...r })));
+    return registry;
   }
 }
 
@@ -54,6 +72,15 @@ export class SyncReceiver {
   private readonly addresses = new Map<string, string>(); // address -> request id
 
   constructor(private readonly o: SyncReceiverOptions) {}
+
+  /**
+   * Rebuild the address-ownership map from requests reloaded after a restart (see `PaymentRequestStore`).
+   * Without this, a device re-sending an op it already synced before the restart would be re-validated
+   * from scratch — harmlessly, since the address is still owned by the same request id, but pointlessly.
+   */
+  hydrate(requests: PaymentRequest[]): void {
+    for (const r of requests) this.addresses.set(r.address, r.id);
+  }
 
   async apply(op: SyncOp): Promise<SyncResponse> {
     if (this.applied.has(op.opId)) return { status: 'duplicate' };

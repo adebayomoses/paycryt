@@ -6,11 +6,17 @@ import {
   type ChainDeposit,
   type Currency,
   FakeChain,
+  type KVStore,
   LeaseRegistry,
+  LeaseRegistryStore,
   MockSettlementProvider,
   type PaymentEvent,
+  type PaymentRequest,
+  PaymentRequestStore,
   PaymentWatcher,
   RateEngine,
+  type RateSnapshot,
+  RateSnapshotStore,
   SettlementOrchestrator,
   StaticRateProvider,
   SyncReceiver,
@@ -35,6 +41,13 @@ export interface ServerConfig {
   sandbox?: boolean;
   /** Starting sandbox prices (fiat per asset), e.g. { 'USDT/NGN': '1500' }. */
   sandboxPrices?: Record<string, string>;
+  /**
+   * Persist payments, the rate audit trail and address leases here (e.g. `new SqliteStore(path)` from
+   * @paycryt/adapters) so they survive a restart. Omit it to run fully in-memory, as before — nothing
+   * changes for existing callers. Note: the fake-chain sandbox's deposit history is never persisted,
+   * on purpose (see docs/persistence.md) — only payments/rates/leases are.
+   */
+  store?: KVStore;
 }
 
 const ASSET_LIST = ASSETS as Record<string, Asset>;
@@ -51,14 +64,16 @@ class HttpError extends Error {
 
 /**
  * A small reference API around @paycryt/core with a built-in fake-chain sandbox.
- * It keeps state in memory: restart it and payments are gone. Swap the pieces for real
- * chain adapters, rate providers and a database when you build your production service.
+ * Pass `store` in `ServerConfig` (e.g. `new SqliteStore(path)` from @paycryt/adapters) and payments, the
+ * rate audit trail and address leases all survive a restart; omit it and it runs fully in-memory as
+ * before. Either way, swap the pieces for real chain adapters and rate providers when you build your
+ * production service — this class stays a starting point, not a production service in itself.
  */
 export class PaycrytServer {
   readonly http: Server;
   readonly engine: RateEngine;
   readonly watcher: PaymentWatcher;
-  readonly leases = new LeaseRegistry();
+  readonly leases: LeaseRegistry;
   readonly chains = new Map<string, FakeChain>();
   readonly events: PaymentEvent[] = [];
   readonly settlement = new MockSettlementProvider();
@@ -70,8 +85,15 @@ export class PaycrytServer {
   private readonly dispatcher?: WebhookDispatcher;
   private readonly receiver: SyncReceiver;
   private readonly deriver = new FakeChain('sandbox');
+  private readonly payments?: PaymentRequestStore;
+  private readonly snapshots?: RateSnapshotStore;
+  private readonly leaseStore?: LeaseRegistryStore;
 
-  constructor(private readonly config: ServerConfig) {
+  /** Use `PaycrytServer.create(config)` instead — restoring persisted state needs an async step. */
+  private constructor(
+    private readonly config: ServerConfig,
+    restored: { leases: LeaseRegistry; snapshots: RateSnapshot[]; requests: PaymentRequest[] },
+  ) {
     const now = () => this.now();
     const seed = config.sandboxPrices ?? { 'USDT/NGN': '1500', 'USDC/NGN': '1500', 'BTC/NGN': '150000000', 'USDT/GHS': '15', 'USDT/KES': '129' };
     // Two slightly different sources so the sandbox demonstrates median + outlier rejection.
@@ -80,17 +102,37 @@ export class PaycrytServer {
       new StaticRateProvider('sandbox-parallel', Object.fromEntries(Object.entries(seed).map(([k, v]) => [k, (Number(v) * 1.002).toString()])), now),
     ];
     this.engine = new RateEngine({ providers: this.prices, spreadBps: config.spreadBps ?? 100, now });
+    for (const s of restored.snapshots) this.engine.log.append(s); // restores the hash chain, in the order it was appended
+    if (!this.engine.log.verify().ok) console.warn('[paycryt] restored rate audit trail failed verification — the persisted store may be corrupted or tampered.');
+
     for (const c of CHAINS) this.chains.set(c, new FakeChain(c, now));
     this.watcher = new PaymentWatcher([...this.chains.values()], now);
+
+    this.leases = restored.leases;
     this.serverLease = this.leases.allocate('server', 1_000_000);
-    this.nextIndex = this.serverLease.start;
+    // Only this server's own (non-offline) payments draw from serverLease; resume past whatever it already issued.
+    this.nextIndex = restored.requests
+      .filter((r) => !r.offline && r.addressIndex !== undefined && r.addressIndex >= this.serverLease.start && r.addressIndex < this.serverLease.end)
+      .reduce((max, r) => Math.max(max, r.addressIndex! + 1), this.serverLease.start);
+
+    if (config.store) {
+      this.payments = new PaymentRequestStore(config.store);
+      this.snapshots = new RateSnapshotStore(config.store);
+      this.leaseStore = new LeaseRegistryStore(config.store);
+    }
 
     this.receiver = new SyncReceiver({
       deriver: this.deriver,
       leases: this.leases,
-      onAccepted: (r) => this.watcher.watch(r),
+      onAccepted: async (r) => {
+        await this.payments?.save(r);
+        this.watcher.watch(r);
+      },
       isKnownSnapshot: (h) => !!this.engine.log.get(h),
     });
+    this.receiver.hydrate(restored.requests); // so a re-synced already-known op isn't treated as an address collision
+
+    for (const r of restored.requests) this.watcher.watch(r); // re-evaluated for real on the next tick() against the chain
 
     if (config.webhookUrl) {
       this.dispatcher = new WebhookDispatcher({ url: config.webhookUrl, secret: config.webhookSecret ?? config.apiKey, fetch: globalThis.fetch as never });
@@ -107,6 +149,22 @@ export class PaycrytServer {
     });
 
     this.http = createServer((req, res) => void this.handle(req, res));
+  }
+
+  /** Builds the server, reloading payments/rates/leases from `config.store` if one is given. */
+  static async create(config: ServerConfig): Promise<PaycrytServer> {
+    let restored: { leases: LeaseRegistry; snapshots: RateSnapshot[]; requests: PaymentRequest[] } = { leases: new LeaseRegistry(), snapshots: [], requests: [] };
+    if (config.store) {
+      const [requests, snapshots, leases] = await Promise.all([
+        new PaymentRequestStore(config.store).all(),
+        new RateSnapshotStore(config.store).loadAll(),
+        new LeaseRegistryStore(config.store).load(),
+      ]);
+      restored = { leases, snapshots, requests };
+    }
+    const server = new PaycrytServer(config, restored);
+    await server.leaseStore?.save(server.leases); // persist the server's own lease allocation on a first-ever boot
+    return server;
   }
 
   now(): number {
@@ -148,7 +206,7 @@ export class PaycrytServer {
       let m = /^\/v1\/rates\/([A-Z0-9]+)-([A-Z]+)$/.exec(path);
       if (method === 'GET' && m) {
         const spread = url.searchParams.get('spreadBps');
-        return send(res, 200, await this.engine.getSnapshot({ base: m[1]!, quote: m[2]!, direction: 'CRYPTO_TO_FIAT', spreadBps: spread ? Number(spread) : undefined }));
+        return send(res, 200, await this.getSnapshot({ base: m[1]!, quote: m[2]!, direction: 'CRYPTO_TO_FIAT', spreadBps: spread ? Number(spread) : undefined }));
       }
       if (method === 'GET' && path === '/v1/audit/rates') {
         return send(res, 200, { verification: this.engine.log.verify(), snapshots: this.engine.log.all() });
@@ -169,8 +227,8 @@ export class PaycrytServer {
       if (method === 'GET' && path === '/v1/payouts') return send(res, 200, [...this.settlement.payouts.values()].map((p) => ({ ...p, request: { ...p.request } })));
 
       // ---- offline POS
-      if (method === 'POST' && path === '/v1/leases') return send(res, 200, this.leases.allocate(String(json.deviceId), json.size ? Number(json.size) : 1_000));
-      if (method === 'POST' && path === '/v1/leases/renew') return send(res, 200, this.leases.renew(String(json.deviceId), json.size ? Number(json.size) : 1_000));
+      if (method === 'POST' && path === '/v1/leases') return send(res, 200, await this.allocateLease(String(json.deviceId), json.size ? Number(json.size) : 1_000));
+      if (method === 'POST' && path === '/v1/leases/renew') return send(res, 200, await this.renewLease(String(json.deviceId), json.size ? Number(json.size) : 1_000));
       if (method === 'POST' && path === '/v1/sync') {
         // Devices send bigint-tagged JSON (see toJson/fromJson in @paycryt/core).
         const result = await this.receiver.apply(fromJson<SyncOp>(body));
@@ -200,7 +258,7 @@ export class PaycrytServer {
     const chain = this.chains.get(asset.chain);
     if (!chain) throw new HttpError(400, `No chain adapter for ${asset.chain}`);
 
-    const snapshot = await this.engine.getSnapshot({ base: asset.symbol, quote: currency.code, direction: 'CRYPTO_TO_FIAT' });
+    const snapshot = await this.getSnapshot({ base: asset.symbol, quote: currency.code, direction: 'CRYPTO_TO_FIAT' });
     const index = this.nextIndex++;
     const request = createPaymentRequest({
       fiat: { currency: currency.code, amountMinor: parseUnits(String(input.amount), currency.decimals) },
@@ -212,6 +270,7 @@ export class PaycrytServer {
       now: this.now(),
       metadata: input.metadata,
     });
+    await this.payments?.save(request);
     this.watcher.watch(request);
     return view(this.watcher.get(request.id)!);
   }
@@ -220,6 +279,25 @@ export class PaycrytServer {
     const w = this.watcher.get(id);
     if (!w) throw new HttpError(404, 'Unknown payment');
     return view(w);
+  }
+
+  /** Fetches a fresh snapshot and, if a store is configured, persists it to the durable rate-audit chain. */
+  private async getSnapshot(req: Parameters<RateEngine['getSnapshot']>[0]): Promise<RateSnapshot> {
+    const snapshot = await this.engine.getSnapshot(req);
+    await this.snapshots?.append(snapshot);
+    return snapshot;
+  }
+
+  private async allocateLease(deviceId: string, size: number) {
+    const lease = this.leases.allocate(deviceId, size);
+    await this.leaseStore?.save(this.leases);
+    return lease;
+  }
+
+  private async renewLease(deviceId: string, size: number) {
+    const lease = this.leases.renew(deviceId, size);
+    await this.leaseStore?.save(this.leases);
+    return lease;
   }
 
   private async sandbox(method: string, path: string, json: any) {

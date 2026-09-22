@@ -20,13 +20,14 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 | **Tron (TRC20 USDT)** | A real, non-custodial address deriver and a real chain watcher against the live TronGrid API — the rail most Nigerian/Ghanaian USDT payments actually use. Experimental. → [docs](docs/tron.md) |
 | **EVM chains (Ethereum, Base, BNB Chain)** | A real chain watcher over JSON-RPC — `eth_getLogs` for ERC-20 transfers, real block-based confirmations, no indexer needed. Checked live against Ethereum mainnet: found 173 real USDT deposits with no mocking. Experimental. → [docs](docs/evm.md) |
 | **Bitcoin (native SegWit)** | A real, non-custodial BIP84 address deriver and a chain watcher over the Esplora REST API (blockstream.info, mempool.space, or self-hosted). Checked live against Bitcoin mainnet: 29 real deposits parsed, matched exactly against an independent recomputation. Experimental. → [docs](docs/bitcoin.md) |
+| **Persistence** | `SqliteStore` (`node:sqlite`, no native dependency) for `OfflinePOS` and the reference server — payments, the rate audit trail and address leases all survive a restart. Verified with a real process restart: a fresh `node` process reloaded and paid a payment created by a different, already-killed process. → [docs](docs/persistence.md) |
 
 ## Try it in two minutes
 
 ```bash
 npm install
 npm run build
-npm test                # 107 tests
+npm test                # 124 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```
@@ -62,7 +63,7 @@ const pos = new OfflinePOS({
   deviceId: 'till-1',
   deriver: new EvmXpubDeriver(process.env.XPUB!), // xpub only: no private keys on the device
   lease: { start: 0, end: 500 },
-  store: new MemoryStore(),                       // use SQLite/IndexedDB in production
+  store: new MemoryStore(),                       // swap for @paycryt/adapters' SqliteStore in production
 });
 
 await pos.cacheRates(engine, [{ base: 'USDT', quote: 'NGN' }]);   // online, once in a while
@@ -94,8 +95,8 @@ const { request, uri } = await pos.createPayment({                // works with 
 | Package | What it is |
 |---|---|
 | [`@paycryt/core`](packages/core) | The library: amounts, HD address derivation, rate engine + audit log, payment policy, watcher, fake chain, offline POS + sync receiver, webhooks, settlement interfaces. Runs in Node and browsers. |
-| [`@paycryt/adapters`](packages/adapters) | Optional: CoinGecko, Binance and parallel-market rate sources; live Tron/TRC20, EVM and Bitcoin chain adapters; Paystack and Flutterwave (all experimental). |
-| [`@paycryt/server`](packages/server) | Optional reference API with the built-in sandbox. In-memory: a starting point, not a production service. |
+| [`@paycryt/adapters`](packages/adapters) | Optional: CoinGecko, Binance and parallel-market rate sources; live Tron/TRC20, EVM and Bitcoin chain adapters; a `SqliteStore` `KVStore`; Paystack and Flutterwave (all experimental). |
+| [`@paycryt/server`](packages/server) | Optional reference API with the built-in sandbox. Runs in-memory by default; pass a `store` to `PaycrytServer.create()` and it survives restarts. Still a starting point, not a production service. |
 | [`examples/offline-pos`](examples/offline-pos) | Runnable end-to-end demo. |
 
 Use only what you need. Install the library from npm, or fork the repo and self-host the server.
