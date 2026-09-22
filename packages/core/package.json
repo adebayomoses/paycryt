@@ -1,0 +1,17 @@
+{
+  "name": "@paycryt/core",
+  "version": "0.1.0",
+  "description": "Paycryt core: HD addresses, fair-rate engine, payment policies, offline POS, fake-chain sandbox.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist"],
+  "dependencies": {
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
+    "@scure/bip32": "^1.5.0",
+    "@scure/bip39": "^1.4.0"
+  }
+}

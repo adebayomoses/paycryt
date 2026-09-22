@@ -1,0 +1,12 @@
+{
+  "name": "@paycryt/server",
+  "version": "0.1.0",
+  "description": "Optional Paycryt reference API server with a built-in fake-chain sandbox.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "paycryt-sandbox": "./dist/cli.js" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "dependencies": { "@paycryt/core": "^0.1.0" }
+}

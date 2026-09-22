@@ -1,0 +1,13 @@
+# Local sandbox: fake chain, simulated deposits, mock settlement. No real money moves.
+#   docker compose up
+#   curl -H "Authorization: Bearer sandbox_key" localhost:8787/v1/rates/USDT-NGN
+services:
+  paycryt-sandbox:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      PAYCRYT_SANDBOX: "true"
+      PAYCRYT_API_KEY: sandbox_key
+      # PAYCRYT_WEBHOOK_URL: http://host.docker.internal:4000/hooks
+      # PAYCRYT_WEBHOOK_SECRET: whsec_change_me
