@@ -6,7 +6,7 @@ Most crypto payment tools assume always-on internet, US/EU banks and one clean e
 
 You bring the accounts and keys. Paycryt never holds funds, and there is nothing to host on our side.
 
-> **Status: alpha (0.1).** The core logic is tested and the sandbox is complete, but there are no production chain adapters yet (see [Roadmap](ROADMAP.md)) and the Paystack/Flutterwave adapters are experimental. Do not point it at real money without your own review.
+> **Status: alpha (0.1).** The core logic is tested and the sandbox is complete. There's one real chain adapter so far — Tron/TRC20 USDT (see [docs/tron.md](docs/tron.md)), verified against live TronGrid and a reference library but not yet run against a real deposit end to end. EVM and Bitcoin adapters aren't built yet (see [Roadmap](ROADMAP.md)), and the Paystack/Flutterwave fiat adapters are experimental. Do not point it at real money without your own review.
 
 ## What makes it different
 
@@ -17,13 +17,14 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 | **Fair-rate audit trail** | Every price a customer is charged is a hash-sealed, hash-chained snapshot: the sources, the outliers dropped, the median, your spread. Anyone can re-verify it later. → [docs](docs/fair-rate.md) |
 | **Underpayment & overpayment handling** | Tolerances, grace windows, top-ups, credits and refunds, expressed as a pure function that returns *actions* for your app to perform. → [docs](docs/payment-policies.md) |
 | **Local fake-chain sandbox** | One command gives you a fake blockchain and a full API. Simulate exact, short, over, split, late and unconfirmed payments; fast-forward time; move rates. No faucets, no RPC keys. → [docs](docs/sandbox.md) |
+| **Tron (TRC20 USDT)** | A real, non-custodial address deriver and a real chain watcher against the live TronGrid API — the rail most Nigerian/Ghanaian USDT payments actually use. Experimental. → [docs](docs/tron.md) |
 
 ## Try it in two minutes
 
 ```bash
 npm install
 npm run build
-npm test                # 70 tests
+npm test                # 82 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```
@@ -80,7 +81,7 @@ const { request, uri } = await pos.createPayment({                // works with 
   │  · cached rate + margin        │              │  amount due recomputed         │  │
   │  · queue (idempotent ops)      │              ├────────────────────────────────┘  │
   └────────────────────────────────┘              │ RateEngine  →  RateAuditLog (hash chain)
-                                                  │ PaymentWatcher ─ ChainAdapter (FakeChain │ your RPC)
+                                                  │ PaymentWatcher ─ ChainAdapter (FakeChain │ TronGrid │ your RPC)
                                                   │ evaluatePayment (policy)  →  events/webhooks
                                                   │ SettlementOrchestrator → Paystack │ Flutterwave │ …
                                                   └───────────────────────────────────┘
@@ -91,7 +92,7 @@ const { request, uri } = await pos.createPayment({                // works with 
 | Package | What it is |
 |---|---|
 | [`@paycryt/core`](packages/core) | The library: amounts, HD address derivation, rate engine + audit log, payment policy, watcher, fake chain, offline POS + sync receiver, webhooks, settlement interfaces. Runs in Node and browsers. |
-| [`@paycryt/adapters`](packages/adapters) | Optional: CoinGecko, Binance and parallel-market rate sources; Paystack and Flutterwave (experimental). |
+| [`@paycryt/adapters`](packages/adapters) | Optional: CoinGecko, Binance and parallel-market rate sources; a live Tron/TRC20 chain adapter; Paystack and Flutterwave (all experimental). |
 | [`@paycryt/server`](packages/server) | Optional reference API with the built-in sandbox. In-memory: a starting point, not a production service. |
 | [`examples/offline-pos`](examples/offline-pos) | Runnable end-to-end demo. |
 
