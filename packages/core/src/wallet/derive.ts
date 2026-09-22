@@ -90,6 +90,47 @@ export class TronXpubDeriver implements AddressDeriver {
 }
 
 /**
+ * SLIP-132 extended-key version bytes for Bitcoin's native SegWit (BIP84, "zpub"/"zprv") account type.
+ * A plain BIP32 xpub uses different version bytes (and a different address format) — see SLIP-132.
+ */
+const ZPUB_VERSIONS = { private: 0x04b2430c, public: 0x04b24746 };
+
+/**
+ * Bitcoin bech32 P2WPKH (native SegWit) address from a compressed secp256k1 public key:
+ * Bech32(hrp, [0, ...ripemd160(sha256(pubkey))]) per BIP173/BIP84.
+ * Byte-for-byte checked against `bitcoinjs-lib`'s `payments.p2wpkh`.
+ */
+export function btcAddressFromPublicKey(compressedPublicKey: Uint8Array, hrp = 'bc'): string {
+  const hash = ripemd160(sha256(compressedPublicKey));
+  return bech32.encode(hrp, [0, ...bech32.toWords(hash)]);
+}
+
+/**
+ * Non-custodial Bitcoin address derivation, BIP84 native SegWit (bc1... addresses).
+ * Give it the *account-level* zpub (m/84'/0'/0', SLIP-132 version bytes — the same string a hardware
+ * wallet or Electrum exports for a native-SegWit account); it derives external addresses 0/index.
+ * Only the zpub is needed on the server or device. Keep the seed offline.
+ */
+export class BtcXpubDeriver implements AddressDeriver {
+  private readonly external: HDKey;
+
+  constructor(
+    zpub: string,
+    readonly chain = 'bitcoin',
+  ) {
+    const key = HDKey.fromExtendedKey(zpub, ZPUB_VERSIONS);
+    if (key.privateKey) throw new Error('Refusing to load an extended PRIVATE key. Pass a zpub, never a zprv.');
+    this.external = key.deriveChild(0);
+  }
+
+  derive(index: number): string {
+    const child = this.external.deriveChild(index);
+    if (!child.publicKey) throw new Error('derivation failed');
+    return btcAddressFromPublicKey(child.publicKey);
+  }
+}
+
+/**
  * Helpers for creating wallets. Use these at setup time on a secure machine, not in production servers.
  */
 export function generateWalletMnemonic(strength: 128 | 256 = 256): string {
@@ -106,4 +147,10 @@ export function evmAccountXpub(mnemonic: string, passphrase = ''): string {
 export function tronAccountXpub(mnemonic: string, passphrase = ''): string {
   const root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic, passphrase));
   return root.derive("m/44'/195'/0'").publicExtendedKey;
+}
+
+/** Account-level zpub for Bitcoin native SegWit, m/84'/0'/0' (SLIP-132 version bytes). Safe to give to servers and POS devices. */
+export function btcAccountZpub(mnemonic: string, passphrase = ''): string {
+  const root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic, passphrase), ZPUB_VERSIONS);
+  return root.derive("m/84'/0'/0'").publicExtendedKey;
 }
