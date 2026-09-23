@@ -11,7 +11,21 @@ interface KVStore {
 }
 ```
 
-`MemoryStore` (in `@paycryt/core`) implements it with nothing but a `Map`, for tests and quick demos. `SqliteStore` (in `@paycryt/adapters`) implements it for real, backed by Node's built-in `node:sqlite` module — no native dependency to compile, no extra package to install.
+`MemoryStore` (in `@paycryt/core`) implements it with nothing but a `Map`, for tests and quick demos. Two real backends live in `@paycryt/adapters`: `SqliteStore` for a Node-based server or till, and `IndexedDbStore` for a browser or WebView-based POS app — the till a cashier actually taps on.
+
+## Using `IndexedDbStore`
+
+```ts
+import { IndexedDbStore } from '@paycryt/adapters';
+
+const store = new IndexedDbStore(); // dbName 'paycryt', storeName 'kv' by default
+```
+
+Values are serialised with `toJson`/`fromJson` — the same as `MemoryStore` and `SqliteStore` — so a payment queue behaves identically no matter which backend an app is built on, rather than depending on IndexedDB's own structured-clone `bigint` support.
+
+> **Verified in a real browser, not a Node polyfill.** A build of `IndexedDbStore` was loaded as a real ES module in a real browser page (Chromium, via an import map — no bundler), exercised through get/set/overwrite/delete/prefix-scan, then the page was navigated away and back to a fresh document. A brand-new `IndexedDbStore` instance in that fresh document read back a payment-request-shaped value with a `bigint` field, byte-for-byte and type-correct — genuine cross-navigation persistence, not just an in-memory reference surviving within one JS heap. (Vitest unit tests, which run under Node, use the standard `fake-indexeddb` polyfill instead.)
+
+Keep one `storeName` per `dbName` for the lifetime of that database (see the JSDoc on `IndexedDbStoreOptions` for why) — this matches `SqliteStore`'s one-table, prefix-namespaced-keys design (`payment:`, `rate:`, ...), which is what `PaymentRequestStore`/`RateSnapshotStore`/`LeaseRegistryStore` already assume.
 
 ## Using `SqliteStore`
 

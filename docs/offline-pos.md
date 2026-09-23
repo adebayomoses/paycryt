@@ -50,7 +50,7 @@ A compromised or buggy device cannot get a bad request accepted:
 
 ## Storage
 
-`KVStore` is a four-method interface. `MemoryStore` is for tests; `SqliteStore` (in `@paycryt/adapters`, backed by Node's built-in `node:sqlite`) is a real backend for a Node-based till. On mobile or in a browser, implement it over IndexedDB or AsyncStorage. Values are serialised with `toJson`/`fromJson`, which preserve `bigint`. See [docs/persistence.md](persistence.md).
+`KVStore` is a four-method interface. `MemoryStore` is for tests. Two real backends live in `@paycryt/adapters`: `SqliteStore` (Node's built-in `node:sqlite`) for a Node-based till, and `IndexedDbStore` for a browser or WebView-based POS app — verified in a real browser, including that data survives a page navigation. On React Native, implement `KVStore` over AsyncStorage yourself; the interface is deliberately four methods. Values are serialised with `toJson`/`fromJson`, which preserve `bigint`. See [docs/persistence.md](persistence.md).
 
 ## Limitations (alpha)
 

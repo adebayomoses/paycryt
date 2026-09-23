@@ -5,3 +5,4 @@ export * from './tron.js';
 export * from './evm.js';
 export * from './bitcoin.js';
 export * from './storage.js';
+export * from './indexeddb.js';

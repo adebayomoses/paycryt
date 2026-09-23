@@ -12,7 +12,7 @@ Paycryt is payments software. Please treat security reports seriously and privat
 - **Devices are untrusted.** `SyncReceiver` re-derives addresses, re-verifies rate hashes and recomputes amounts. If you write your own sync endpoint, do the same.
 - **Webhooks are signed** (HMAC-SHA256 with a timestamp). Always verify with `verifyWebhook` on the raw body and reject old timestamps.
 - **Provider credentials** (Paystack, Flutterwave secret keys) belong in environment variables or a secret manager, never in the repo or on POS devices.
-- **A persisted store is sensitive data.** If you configure `SqliteStore` (or your own `KVStore`) for `PaycrytServer` or `OfflinePOS`, the resulting file holds your complete payment history and rate audit trail. Restrict filesystem permissions on it, back it up somewhere access-controlled, and never commit it to source control. See [docs/persistence.md](docs/persistence.md).
+- **A persisted store is sensitive data.** If you configure `SqliteStore`, `IndexedDbStore` (or your own `KVStore`) for `PaycrytServer` or `OfflinePOS`, it holds your complete payment history and rate audit trail. For `SqliteStore`, restrict filesystem permissions on the database file, back it up somewhere access-controlled, and never commit it to source control. For `IndexedDbStore`, remember it's per-origin browser storage, readable by any script running on that origin — the usual web same-origin protections are what's standing between it and other code, same as any other client-side data. See [docs/persistence.md](docs/persistence.md).
 
 ## Known gaps (alpha)
 
