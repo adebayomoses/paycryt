@@ -20,7 +20,7 @@ The three chains this project targets now all have a real, live-verified (if sti
 - ✅ **Persistence:** `SqliteStore` (`@paycryt/adapters`, backed by Node's built-in `node:sqlite`) implementing `KVStore`, plus `PaymentRequestStore`/`RateSnapshotStore`/`LeaseRegistryStore` (`@paycryt/core`). Wired into `PaycrytServer` (now `PaycrytServer.create()`, async) so payments, the rate audit trail and address leases all survive a restart. Verified with a genuine process-level restart: a payment created by one `node` process was correctly reloaded and paid by a completely separate process started afterward, over a real SQLite file. See [docs/persistence.md](docs/persistence.md).
 - 🚧 A real block-confirmation count for Tron (TronGrid's transfer endpoint only exposes solidified/not; see [docs/tron.md](docs/tron.md#confirmations))
 - 🚧 `IndexedDbStore`/`AsyncStorage`-backed `KVStore` for browser/mobile POS devices
-- 🚧 Late-watch window: keep polling finalised addresses for stray deposits
+- ✅ **Late-watch window:** `PaymentWatcher` keeps polling an address for `policy.lateWatchMs` (default 24h) after a payment finalizes, so a deposit that lands after the deadline — or extra stray funds on an already-`paid` payment — is still caught and flagged for refund/review instead of vanishing silently. Verified live against the sandbox server: a payment marked `expired`, then paid 5 minutes later, correctly transitioned to `refund_required` with the refund action attached. See [docs/payment-policies.md](docs/payment-policies.md#catching-deposits-after-finalization-the-late-watch-window).
 - 🚧 Multi-tenant API keys and per-merchant policies
 - 🚧 Verify Paystack/Flutterwave adapters against live sandboxes; add provider webhooks for payout status
 

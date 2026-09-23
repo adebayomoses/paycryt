@@ -30,6 +30,13 @@ export interface PaymentPolicy {
 
   /** Deposits after expiry + grace: send them back, or flag for a human. */
   latePayment: 'refund' | 'manual_review';
+
+  /**
+   * Once a payment reaches a final status, `PaymentWatcher` keeps polling its address for this long
+   * before giving up — so a stray deposit that lands after the request is already closed still gets
+   * caught (as `refund_required`/`manual_review`, per `latePayment`) instead of vanishing silently.
+   */
+  lateWatchMs: number;
 }
 
 export const DEFAULT_POLICY: PaymentPolicy = {
@@ -39,6 +46,7 @@ export const DEFAULT_POLICY: PaymentPolicy = {
   underpayment: { toleranceBps: 50, onExpiry: 'refund' },
   overpayment: { toleranceBps: 50, action: 'credit' },
   latePayment: 'refund',
+  lateWatchMs: 24 * 60 * 60_000,
 };
 
 export function withPolicy(overrides: DeepPartial<PaymentPolicy> = {}): PaymentPolicy {

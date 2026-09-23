@@ -19,7 +19,7 @@ Paycryt is payments software. Please treat security reports seriously and privat
 - The reference server has a single shared API key regardless of whether persistence is enabled. It is a starting point, not a hardened service. `node:sqlite` (used by `SqliteStore`) is itself an experimental Node API.
 - Three real chain adapters exist (Tron/TRC20 via TronGrid, EVM chains via JSON-RPC, Bitcoin via the Esplora REST API), and all are experimental. The EVM and Bitcoin adapters have each been checked live against their real mainnets with no mocking (real deposits found, real confirmations computed, cross-checked against an independent recomputation); the Tron one is verified against live TronGrid responses and a reference address-derivation library. None has been run through a full create-payment-and-get-paid flow end to end. The fake chain must never be used to decide real payments.
 - Bank/mobile-money adapters are experimental and unverified against live providers.
-- Late deposits to already-finalised addresses are not detected (see docs/payment-policies.md).
+- Late deposits to an already-finalised address are only caught within `policy.lateWatchMs` (default 24h) of finalization; after that the watcher permanently stops polling that address (see docs/payment-policies.md).
 
 ## Your responsibilities
 

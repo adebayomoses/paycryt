@@ -35,6 +35,8 @@ export interface WatchedPayment {
   request: PaymentRequest;
   status: PaymentStatus;
   evaluation: PaymentEvaluation;
+  /** When this payment first reached a final status. Undefined while still open. */
+  finalizedAt?: number;
 }
 
 /**
@@ -53,8 +55,9 @@ export class PaymentWatcher {
 
   watch(request: PaymentRequest): void {
     if (this.payments.has(request.id)) return;
-    const evaluation = evaluatePayment(request, [], this.clock());
-    this.payments.set(request.id, { request, status: evaluation.status, evaluation });
+    const now = this.clock();
+    const evaluation = evaluatePayment(request, [], now);
+    this.payments.set(request.id, { request, status: evaluation.status, evaluation, finalizedAt: isFinal(evaluation.status) ? now : undefined });
   }
 
   get(id: string): WatchedPayment | undefined {
@@ -69,20 +72,27 @@ export class PaymentWatcher {
     this.handlers.push(handler);
   }
 
-  /** Re-check every payment that has not reached a final state. Returns the events emitted. */
+  /**
+   * Re-check every payment that is still open, plus any recently-finalized one still inside its
+   * `policy.lateWatchMs` window (so a stray deposit that lands after a payment closed is still caught).
+   * Returns the events emitted.
+   */
   async tick(): Promise<PaymentEvent[]> {
     const events: PaymentEvent[] = [];
     const now = this.clock();
     for (const entry of this.payments.values()) {
-      if (isFinal(entry.status)) continue;
+      const wasFinal = isFinal(entry.status);
+      if (wasFinal && !this.withinLateWatch(entry, now)) continue; // fully done watching this address
       const chain = this.chains.find((c) => c.chain === entry.request.asset.chain);
       if (!chain) continue;
       const deposits = await chain.getDeposits(entry.request.address, entry.request.asset.symbol);
       const evaluation = evaluatePayment(entry.request, deposits, now);
-      const changed = evaluation.status !== entry.status || evaluation.received !== entry.evaluation.received;
+      const changed =
+        evaluation.status !== entry.status || evaluation.received !== entry.evaluation.received || evaluation.late !== entry.evaluation.late;
       entry.evaluation = evaluation;
       if (!changed) continue;
       entry.status = evaluation.status;
+      if (!wasFinal && isFinal(evaluation.status)) entry.finalizedAt = now; // start the late-watch window from the first finalization
       const type = EVENT_FOR_STATUS[evaluation.status];
       if (!type) continue;
       events.push({
@@ -96,6 +106,10 @@ export class PaymentWatcher {
     }
     for (const e of events) for (const h of this.handlers) await h(e);
     return events;
+  }
+
+  private withinLateWatch(entry: WatchedPayment, now: number): boolean {
+    return entry.finalizedAt !== undefined && now - entry.finalizedAt <= entry.request.policy.lateWatchMs;
   }
 }
 

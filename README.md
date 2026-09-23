@@ -15,7 +15,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 | **Offline-first POS** | A till keeps creating payment requests with no internet: addresses are derived locally from an xpub, prices come from a cached rate plus a safety margin, and everything reconciles on sync. The server re-verifies every request and trusts nothing the device says. → [docs](docs/offline-pos.md) |
 | **Local fiat & mobile-money adapters** | Off-ramp and on-ramp through interfaces, with experimental Paystack and Flutterwave adapters (bank + MTN MoMo / M-Pesa style wallets). → [docs](docs/adapters.md) |
 | **Fair-rate audit trail** | Every price a customer is charged is a hash-sealed, hash-chained snapshot: the sources, the outliers dropped, the median, your spread. Anyone can re-verify it later. → [docs](docs/fair-rate.md) |
-| **Underpayment & overpayment handling** | Tolerances, grace windows, top-ups, credits and refunds, expressed as a pure function that returns *actions* for your app to perform. → [docs](docs/payment-policies.md) |
+| **Underpayment & overpayment handling** | Tolerances, grace windows, top-ups, credits and refunds, expressed as a pure function that returns *actions* for your app to perform. A configurable late-watch window keeps catching stray deposits on an address for up to 24h (default) after a payment closes, instead of going silent the instant it finalizes. → [docs](docs/payment-policies.md) |
 | **Local fake-chain sandbox** | One command gives you a fake blockchain and a full API. Simulate exact, short, over, split, late and unconfirmed payments; fast-forward time; move rates. No faucets, no RPC keys. → [docs](docs/sandbox.md) |
 | **Tron (TRC20 USDT)** | A real, non-custodial address deriver and a real chain watcher against the live TronGrid API — the rail most Nigerian/Ghanaian USDT payments actually use. Experimental. → [docs](docs/tron.md) |
 | **EVM chains (Ethereum, Base, BNB Chain)** | A real chain watcher over JSON-RPC — `eth_getLogs` for ERC-20 transfers, real block-based confirmations, no indexer needed. Checked live against Ethereum mainnet: found 173 real USDT deposits with no mocking. Experimental. → [docs](docs/evm.md) |
@@ -27,7 +27,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 ```bash
 npm install
 npm run build
-npm test                # 124 tests
+npm test                # 130 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```

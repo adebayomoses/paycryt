@@ -17,6 +17,7 @@ withPolicy({
   underpayment: { toleranceBps: 50, onExpiry: 'refund' },   // 'refund' | 'accept_partial' | 'manual_review'
   overpayment:  { toleranceBps: 50, action: 'credit' },     // 'keep' | 'credit' | 'refund' | 'manual_review'
   latePayment: 'refund',                                    // 'refund' | 'manual_review'
+  lateWatchMs: 24 * 60 * 60_000,                             // how long PaymentWatcher keeps polling after finalization
 });
 ```
 
@@ -44,12 +45,13 @@ watcher.watch(request);
 setInterval(() => watcher.tick(), 5_000);
 ```
 
-Events are emitted only when the status or confirmed amount changes, and carry a stable `id` so webhook receivers can de-duplicate.
+Events are emitted only when the status, the confirmed amount, or the late-arrived amount changes, and carry a stable `id` so webhook receivers can de-duplicate.
 
-## Webhooks
+## Catching deposits after finalization (the late-watch window)
 
-`WebhookDispatcher` POSTs events with a Stripe-style header `paycryt-signature: t=<unix>,v1=<hmac-sha256>`, retries with backoff (1s, 5s, 30s, 5min, 30min), keeps a delivery log, and supports `replay(eventId)`. Verify on the receiving side with `verifyWebhook(secret, rawBody, header)`, which also rejects deliveries older than 5 minutes.
+A payment reaching a final status (`paid`, `overpaid`, `expired`, `refund_required`, `manual_review`) doesn't mean the watcher stops caring about its address immediately. It keeps polling for `policy.lateWatchMs` (default 24h) past the moment of finalization, specifically to catch a customer who pays after the deadline, or extra stray funds on an address you'd already closed the book on:
 
-## Known limitation
+- If it was `expired` (nothing received) and a deposit shows up within the window, it flips to `refund_required` (or `manual_review`, per `latePayment`) — the same as if the deposit had arrived right at expiry.
+- If it was already `paid` and *more* money shows up within the window, the status stays `paid` (the original obligation was met on time), but the event's `actions` gains a `late_payment` refund/review entry for the extra amount, and a new event fires because `late` changed even though `status` didn't.
 
-The watcher stops polling a payment once it reaches a final status (`paid`, `overpaid`, `expired`, `refund_required`, `manual_review`). A deposit sent to an address *after* its request expired and was finalised is therefore not detected. Operators should periodically sweep or scan old addresses. A configurable "late-watch" window is on the [roadmap](../ROADMAP.md).
+Once `lateWatchMs` has fully elapsed since finalization, the watcher permanently stops polling that address — a deposit arriving after that point is not detected. Set `lateWatchMs` higher for slower-moving payment flows, or lower to bound how many addresses stay actively polled.
