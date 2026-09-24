@@ -58,7 +58,82 @@ export function withPolicy(overrides: DeepPartial<PaymentPolicy> = {}): PaymentP
   } as PaymentPolicy;
 }
 
-type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+
+const DAY = 24 * 60 * 60_000;
+
+function intInRange(v: unknown, name: string, min: number, max: number): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) {
+    throw new Error(`policy.${name} must be an integer between ${min} and ${max}`);
+  }
+  return v;
+}
+
+function oneOf<T extends string>(v: unknown, name: string, allowed: readonly T[]): T {
+  if (typeof v !== 'string' || !(allowed as readonly string[]).includes(v)) {
+    throw new Error(`policy.${name} must be one of: ${allowed.join(', ')}`);
+  }
+  return v as T;
+}
+
+function onlyKeys(obj: Record<string, unknown>, prefix: string, allowed: readonly string[]): void {
+  for (const k of Object.keys(obj)) {
+    if (!allowed.includes(k)) throw new Error(`Unknown policy field "${prefix}${k}". Allowed: ${allowed.join(', ')}`);
+  }
+}
+
+/**
+ * Checks untrusted policy overrides (for example from an API request) and returns them typed. Rejects
+ * unknown fields, so a typo like `expiry` fails loudly instead of being silently ignored, and rejects
+ * out-of-range values.
+ */
+export function validatePolicyOverrides(input: unknown): DeepPartial<PaymentPolicy> {
+  if (input === undefined || input === null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('policy must be an object');
+  const p = input as Record<string, unknown>;
+  onlyKeys(p, '', ['minConfirmations', 'expiryMs', 'graceMs', 'underpayment', 'overpayment', 'latePayment', 'lateWatchMs']);
+
+  const out: DeepPartial<PaymentPolicy> = {};
+  if (p.minConfirmations !== undefined) out.minConfirmations = intInRange(p.minConfirmations, 'minConfirmations', 0, 1_000);
+  if (p.expiryMs !== undefined) out.expiryMs = intInRange(p.expiryMs, 'expiryMs', 1_000, 30 * DAY);
+  if (p.graceMs !== undefined) out.graceMs = intInRange(p.graceMs, 'graceMs', 0, 7 * DAY);
+  if (p.lateWatchMs !== undefined) out.lateWatchMs = intInRange(p.lateWatchMs, 'lateWatchMs', 0, 30 * DAY);
+  if (p.latePayment !== undefined) out.latePayment = oneOf(p.latePayment, 'latePayment', ['refund', 'manual_review'] as const);
+
+  if (p.underpayment !== undefined) {
+    const o = objectOf(p.underpayment, 'underpayment');
+    onlyKeys(o, 'underpayment.', ['toleranceBps', 'onExpiry']);
+    out.underpayment = {};
+    if (o.toleranceBps !== undefined) out.underpayment.toleranceBps = intInRange(o.toleranceBps, 'underpayment.toleranceBps', 0, 10_000);
+    if (o.onExpiry !== undefined) out.underpayment.onExpiry = oneOf(o.onExpiry, 'underpayment.onExpiry', ['refund', 'accept_partial', 'manual_review'] as const);
+  }
+  if (p.overpayment !== undefined) {
+    const o = objectOf(p.overpayment, 'overpayment');
+    onlyKeys(o, 'overpayment.', ['toleranceBps', 'action']);
+    out.overpayment = {};
+    if (o.toleranceBps !== undefined) out.overpayment.toleranceBps = intInRange(o.toleranceBps, 'overpayment.toleranceBps', 0, 10_000);
+    if (o.action !== undefined) out.overpayment.action = oneOf(o.action, 'overpayment.action', ['keep', 'credit', 'refund', 'manual_review'] as const);
+  }
+  return out;
+}
+
+function objectOf(v: unknown, name: string): Record<string, unknown> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error(`policy.${name} must be an object`);
+  return v as Record<string, unknown>;
+}
+
+/** Merges policy overrides in order (later wins), field by field including the nested underpayment/overpayment groups. */
+export function mergePolicyOverrides(...layers: Array<DeepPartial<PaymentPolicy> | undefined>): DeepPartial<PaymentPolicy> {
+  const out: DeepPartial<PaymentPolicy> = {};
+  for (const layer of layers) {
+    if (!layer) continue;
+    const { underpayment, overpayment, ...rest } = layer;
+    Object.assign(out, rest);
+    if (underpayment) out.underpayment = { ...out.underpayment, ...underpayment };
+    if (overpayment) out.overpayment = { ...out.overpayment, ...overpayment };
+  }
+  return out;
+}
 
 export type PaymentStatus =
   | 'awaiting_payment'

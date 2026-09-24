@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluatePayment, withPolicy, type ChainDeposit } from '@paycryt/core';
+import { evaluatePayment, mergePolicyOverrides, validatePolicyOverrides, withPolicy, type ChainDeposit } from '@paycryt/core';
 import { makeRequest } from './helpers.js';
 
 const USDT = (n: number) => BigInt(Math.round(n * 1e6));
@@ -117,5 +117,44 @@ describe('payment policy', () => {
     const other = { ...dep(request, USDT(10), 1, clock.now()), address: 'someone-else' };
     const wrongAsset = { ...dep(request, USDT(10), 1, clock.now()), assetSymbol: 'USDC' };
     expect(evaluatePayment(request, [other, wrongAsset], clock.now()).status).toBe('awaiting_payment');
+  });
+});
+
+describe('policy override validation and merging', () => {
+  it('accepts a valid override and returns it typed', () => {
+    const p = validatePolicyOverrides({ expiryMs: 60_000, underpayment: { toleranceBps: 100, onExpiry: 'manual_review' }, latePayment: 'manual_review' });
+    expect(p).toEqual({ expiryMs: 60_000, underpayment: { toleranceBps: 100, onExpiry: 'manual_review' }, latePayment: 'manual_review' });
+    expect(validatePolicyOverrides(undefined)).toEqual({});
+    expect(validatePolicyOverrides(null)).toEqual({});
+  });
+
+  it('rejects unknown fields, so a typo cannot be silently ignored', () => {
+    expect(() => validatePolicyOverrides({ expiry: 1000 })).toThrow(/Unknown policy field "expiry"/);
+    expect(() => validatePolicyOverrides({ underpayment: { tolerance: 5 } })).toThrow(/Unknown policy field "underpayment.tolerance"/);
+  });
+
+  it('rejects out-of-range, wrong-typed and non-integer values', () => {
+    expect(() => validatePolicyOverrides({ expiryMs: -5 })).toThrow(/expiryMs/);
+    expect(() => validatePolicyOverrides({ expiryMs: 5 })).toThrow(/expiryMs/); // below the 1s minimum
+    expect(() => validatePolicyOverrides({ expiryMs: '900000' })).toThrow(/expiryMs/);
+    expect(() => validatePolicyOverrides({ graceMs: 1.5 })).toThrow(/graceMs/);
+    expect(() => validatePolicyOverrides({ minConfirmations: 5_000 })).toThrow(/minConfirmations/);
+    expect(() => validatePolicyOverrides({ overpayment: { toleranceBps: 20_000 } })).toThrow(/toleranceBps/);
+    expect(() => validatePolicyOverrides({ latePayment: 'ignore' })).toThrow(/latePayment/);
+    expect(() => validatePolicyOverrides({ overpayment: { action: 'donate' } })).toThrow(/overpayment.action/);
+    expect(() => validatePolicyOverrides('nope')).toThrow(/must be an object/);
+    expect(() => validatePolicyOverrides([])).toThrow(/must be an object/);
+    expect(() => validatePolicyOverrides({ underpayment: 5 })).toThrow(/underpayment must be an object/);
+  });
+
+  it('merges layers field by field, including the nested groups, later layers winning', () => {
+    const merged = mergePolicyOverrides(
+      { expiryMs: 60_000, underpayment: { toleranceBps: 100, onExpiry: 'manual_review' } },
+      undefined,
+      { underpayment: { toleranceBps: 25 }, graceMs: 5_000 },
+    );
+    expect(merged).toEqual({ expiryMs: 60_000, graceMs: 5_000, underpayment: { toleranceBps: 25, onExpiry: 'manual_review' } });
+    // ...and the result feeds withPolicy without losing the untouched nested default
+    expect(withPolicy(merged).overpayment).toEqual({ toleranceBps: 50, action: 'credit' });
   });
 });

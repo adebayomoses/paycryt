@@ -25,6 +25,7 @@ Environment: `PORT`, `HOST`, `PAYCRYT_API_KEY`, `PAYCRYT_SPREAD_BPS`, `PAYCRYT_W
 | `GET /v1/audit/rates`, `/:hash` | the rate log and its verification result |
 | `POST /v1/leases`, `/v1/leases/renew` | give an offline device an address range |
 | `POST /v1/sync` | receive an offline device's queued operations |
+| `POST /v1/admin/merchants`, … | admin key only: onboard and manage merchant API keys — see [multi-tenant.md](multi-tenant.md) |
 
 ### Sandbox-only controls
 

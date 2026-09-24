@@ -2,6 +2,7 @@ export * from './amount.js';
 export * from './hash.js';
 export * from './serialize.js';
 export * from './persistence.js';
+export * from './merchants.js';
 export * from './webhooks.js';
 
 export * from './rates/snapshot.js';

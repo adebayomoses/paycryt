@@ -33,6 +33,8 @@ export interface PaymentRequest {
   /** Set when created by an offline POS device. */
   offline?: { deviceId: string; createdOfflineAt: number };
   metadata?: Record<string, string>;
+  /** The merchant (tenant) this payment belongs to, when the server is multi-tenant. */
+  merchantId?: string;
 }
 
 export type CurrencyLike = Currency;

@@ -16,6 +16,7 @@ export interface CreatePaymentRequestInput {
   now: number;
   offline?: PaymentRequest['offline'];
   metadata?: Record<string, string>;
+  merchantId?: string;
 }
 
 export function createPaymentRequest(input: CreatePaymentRequestInput): PaymentRequest {
@@ -45,6 +46,7 @@ export function createPaymentRequest(input: CreatePaymentRequestInput): PaymentR
     policy,
     offline: input.offline,
     metadata: input.metadata,
+    merchantId: input.merchantId,
   };
 }
 
