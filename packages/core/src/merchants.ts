@@ -2,6 +2,18 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { randomId, sha256Hex } from './hash.js';
 import type { DeepPartial, PaymentPolicy } from './payments/policy.js';
 import type { KVStore } from './serialize.js';
+import { WALLET_FAMILIES, type WalletFamily, deriverForWallet } from './wallet/family.js';
+
+/** A merchant's wallet public keys by family. Public keys only: the server can never spend from them. */
+export type MerchantWallets = Partial<Record<WalletFamily, string>>;
+
+/** Thrown when a wallet key is already in use by a different merchant. */
+export class WalletConflictError extends Error {
+  constructor(readonly family: WalletFamily) {
+    super(`That ${family} wallet key is already registered to another merchant. Each merchant needs their own, or their customers' payments would share addresses.`);
+    this.name = 'WalletConflictError';
+  }
+}
 
 /** A tenant of a multi-tenant Paycryt server: one business with its own API key, settings and data. */
 export interface Merchant {
@@ -22,6 +34,11 @@ export interface Merchant {
   spreadBps?: number;
   /** Policy defaults for this merchant's payments; a per-request `policy` overrides them field by field. */
   policy?: DeepPartial<PaymentPolicy>;
+  /**
+   * Where this merchant's customers pay: deposit addresses are derived from these keys, so funds settle
+   * to the merchant's own wallet. Set by the operator, never by the merchant.
+   */
+  wallets?: MerchantWallets;
 }
 
 /** What is safe to show an admin or the merchant themselves: everything except the secrets. */
@@ -34,6 +51,7 @@ export interface CreateMerchantInput {
   webhookSecret?: string;
   spreadBps?: number;
   policy?: DeepPartial<PaymentPolicy>;
+  wallets?: MerchantWallets;
   now?: number;
 }
 
@@ -62,6 +80,7 @@ export class MerchantStore {
     if (input.spreadBps !== undefined && (!Number.isInteger(input.spreadBps) || input.spreadBps < 0 || input.spreadBps > 5_000)) {
       throw new Error('spreadBps must be an integer between 0 and 5000');
     }
+    const wallets = input.wallets ? await this.checkWallets(undefined, input.wallets) : undefined;
     const apiKey = generateApiKey();
     const merchant: Merchant = {
       id: randomId('mch'),
@@ -73,6 +92,7 @@ export class MerchantStore {
       webhookSecret: input.webhookSecret ?? (input.webhookUrl ? `whsec_${bytesToHex(globalThis.crypto.getRandomValues(new Uint8Array(24)))}` : undefined),
       spreadBps: input.spreadBps,
       policy: input.policy,
+      wallets,
     };
     await this.store.set(`merchant:${merchant.id}`, merchant);
     await this.store.set(`merchant-key:${merchant.keyHash}`, merchant.id);
@@ -108,6 +128,47 @@ export class MerchantStore {
     await this.store.set(`merchant:${id}`, updated);
     await this.store.set(`merchant-key:${updated.keyHash}`, id);
     return { merchant: updated, apiKey };
+  }
+
+  /**
+   * Sets or clears wallet keys. A key set to a string is validated and must be unique across merchants;
+   * `null` removes that family. Families you don't mention are left alone.
+   */
+  async setWallets(id: string, changes: Partial<Record<WalletFamily, string | null>>): Promise<Merchant | undefined> {
+    const merchant = await this.get(id);
+    if (!merchant) return undefined;
+    for (const k of Object.keys(changes)) {
+      if (!(WALLET_FAMILIES as readonly string[]).includes(k)) throw new Error(`Unknown wallet family "${k}". Allowed: ${WALLET_FAMILIES.join(', ')}`);
+    }
+    const next: MerchantWallets = { ...merchant.wallets };
+    const additions: MerchantWallets = {};
+    for (const family of WALLET_FAMILIES) {
+      const v = changes[family];
+      if (v === null) delete next[family];
+      else if (typeof v === 'string') additions[family] = v;
+    }
+    Object.assign(next, await this.checkWallets(id, additions));
+    const updated: Merchant = { ...merchant, wallets: Object.keys(next).length ? next : undefined };
+    await this.store.set(`merchant:${id}`, updated);
+    return updated;
+  }
+
+  /** Validates each key and rejects one already used by a different merchant (`selfId` may re-set its own). */
+  private async checkWallets(selfId: string | undefined, wallets: MerchantWallets): Promise<MerchantWallets> {
+    const clean: MerchantWallets = {};
+    const others = (await this.list()).filter((m) => m.id !== selfId);
+    for (const family of WALLET_FAMILIES) {
+      const key = wallets[family];
+      if (key === undefined) continue;
+      if (typeof key !== 'string') throw new Error(`${family} wallet must be a string`);
+      deriverForWallet(family, key); // throws a clear error for a bad or private key
+      if (others.some((m) => m.wallets?.[family] === key)) throw new WalletConflictError(family);
+      clean[family] = key;
+    }
+    for (const k of Object.keys(wallets)) {
+      if (!(WALLET_FAMILIES as readonly string[]).includes(k)) throw new Error(`Unknown wallet family "${k}". Allowed: ${WALLET_FAMILIES.join(', ')}`);
+    }
+    return clean;
   }
 
   async setDisabled(id: string, disabled: boolean): Promise<Merchant | undefined> {

@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryStore, MerchantStore, generateApiKey, sha256Hex, toMerchantView, toJson } from '@paycryt/core';
+import { HDKey } from '@scure/bip32';
+import { mnemonicToSeedSync } from '@scure/bip39';
+import {
+  MemoryStore,
+  MerchantStore,
+  WalletConflictError,
+  btcAccountZpub,
+  deriverForWallet,
+  evmAccountXpub,
+  generateApiKey,
+  sha256Hex,
+  toJson,
+  toMerchantView,
+  tronAccountXpub,
+  walletFamilyForChain,
+} from '@paycryt/core';
 
 describe('MerchantStore', () => {
   it('creates a merchant and authenticates by its API key', async () => {
@@ -88,5 +103,69 @@ describe('MerchantStore', () => {
     expect((await reloaded.list()).map((m) => m.name)).toEqual(['A', 'B']);
     expect((await reloaded.authenticate(b.apiKey))?.name).toBe('B');
     expect((await reloaded.authenticate(a.apiKey))?.name).toBe('A');
+  });
+});
+
+describe('merchant wallets', () => {
+  const DEV = 'test test test test test test test test test test test junk';
+  const OTHER = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+  it('maps chains to wallet families', () => {
+    expect(['ethereum', 'base', 'bsc'].map(walletFamilyForChain)).toEqual(['evm', 'evm', 'evm']);
+    expect(walletFamilyForChain('tron')).toBe('tron');
+    expect(walletFamilyForChain('bitcoin')).toBe('bitcoin');
+    expect(walletFamilyForChain('solana')).toBeUndefined();
+  });
+
+  it('builds a working deriver per family and proves the key derives', () => {
+    expect(deriverForWallet('evm', evmAccountXpub(DEV)).derive(0)).toBe('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266');
+    expect(deriverForWallet('tron', tronAccountXpub(DEV)).derive(0)).toMatch(/^T[1-9A-HJ-NP-Za-km-z]{33}$/);
+    expect(deriverForWallet('bitcoin', btcAccountZpub(DEV)).derive(0)).toBe('bc1q4qw42stdzjqs59xvlrlxr8526e3nunw7mp73te');
+  });
+
+  it('rejects a private key or junk with an error that never contains the input', () => {
+    const xprv = HDKey.fromMasterSeed(mnemonicToSeedSync(DEV)).privateExtendedKey;
+    let msg = '';
+    try {
+      deriverForWallet('evm', xprv);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain('PUBLIC key');
+    expect(msg).not.toContain(xprv);
+    expect(() => deriverForWallet('evm', 'junk')).toThrow(/Invalid evm wallet key/);
+    expect(() => deriverForWallet('bitcoin', evmAccountXpub(DEV))).toThrow(/Invalid bitcoin wallet key/); // xpub is not a zpub
+  });
+
+  it('stores validated wallets on create, and keeps them across a reload', async () => {
+    const kv = new MemoryStore();
+    const store = new MerchantStore(kv);
+    const { merchant } = await store.create({ name: 'A', wallets: { evm: evmAccountXpub(DEV) } });
+    expect((await new MerchantStore(kv).get(merchant.id))?.wallets).toEqual({ evm: evmAccountXpub(DEV) });
+  });
+
+  it('enforces one merchant per wallet key, allows re-setting your own, and supports clearing', async () => {
+    const store = new MerchantStore(new MemoryStore());
+    const a = (await store.create({ name: 'A', wallets: { evm: evmAccountXpub(DEV) } })).merchant;
+    const b = (await store.create({ name: 'B' })).merchant;
+
+    await expect(store.setWallets(b.id, { evm: evmAccountXpub(DEV) })).rejects.toBeInstanceOf(WalletConflictError);
+    await expect(store.create({ name: 'C', wallets: { evm: evmAccountXpub(DEV) } })).rejects.toBeInstanceOf(WalletConflictError);
+    expect((await store.setWallets(a.id, { evm: evmAccountXpub(DEV) }))?.wallets?.evm).toBe(evmAccountXpub(DEV)); // your own key again
+
+    const moved = await store.setWallets(b.id, { evm: evmAccountXpub(OTHER), tron: tronAccountXpub(OTHER) });
+    expect(Object.keys(moved!.wallets!).sort()).toEqual(['evm', 'tron']);
+    const cleared = await store.setWallets(b.id, { evm: null, tron: null });
+    expect(cleared!.wallets).toBeUndefined();
+    // A is still using this key, so B still cannot take it:
+    await expect(store.setWallets(b.id, { evm: evmAccountXpub(DEV) })).rejects.toBeInstanceOf(WalletConflictError); // still A's
+    expect(await store.setWallets('mch_missing', { evm: null })).toBeUndefined();
+  });
+
+  it('rejects unknown wallet families instead of ignoring them', async () => {
+    const store = new MerchantStore(new MemoryStore());
+    const a = (await store.create({ name: 'A' })).merchant;
+    await expect(store.setWallets(a.id, { solana: 'x' } as never)).rejects.toThrow(/Unknown wallet family/);
+    await expect(store.create({ name: 'B', wallets: { solana: 'x' } as never })).rejects.toThrow(/Unknown wallet family/);
   });
 });

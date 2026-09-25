@@ -13,6 +13,7 @@ export * from './payments/policy.js';
 export * from './payments/request.js';
 
 export * from './wallet/derive.js';
+export * from './wallet/family.js';
 
 export * from './chain/adapter.js';
 export * from './chain/fake.js';

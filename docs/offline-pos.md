@@ -37,7 +37,12 @@ A compromised or buggy device cannot get a bad request accepted:
 | Root snapshot exists in *your* audit log (`isKnownSnapshot`) | invented rates: a hash proves integrity, not origin |
 | Extra spread within `maxOfflineSpreadBps` (default 500) | under-charging via a negative margin |
 | `amountDue` recomputed from the rate | under-charging by editing the amount |
-| `opId` not seen before | double-applying a retried op |
+| `opId` not seen before | double-applying a retried op (concurrent retries are applied exactly once) |
+| Asset matches one the server prices (`allowedAssets`, default the built-in `ASSETS`) | a device inventing its own asset description: the server recomputes the price *from the device's claim*, so `decimals: 0` would undercharge a million-fold |
+| `expiresAt` no later than the rate lock | stretching how long a quoted rate is honoured |
+| Request id not already used by a different address (`lookupRequest`) | reusing another payment's id to overwrite it, including another tenant's |
+| Policy replaced by the server's (`policyFor`) | a device writing its own rules, e.g. `toleranceBps: 10000` so any payment counts as paid |
+| Address checked against the deriver chosen per op (`resolveDeriver`) | one tenant's wallet standing in for another's |
 
 ## Tuning
 

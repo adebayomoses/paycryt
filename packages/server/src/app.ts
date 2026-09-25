@@ -1,6 +1,7 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http';
 import {
   ASSETS,
+  type AddressDeriver,
   type Asset,
   CURRENCIES,
   type ChainDeposit,
@@ -24,14 +25,18 @@ import {
   StaticRateProvider,
   SyncReceiver,
   type SyncOp,
+  WalletConflictError,
+  type WalletFamily,
   WebhookDispatcher,
   createPaymentRequest,
+  deriverForWallet,
   fromJson,
   mergePolicyOverrides,
   parseUnits,
   safeEqual,
   toMerchantView,
   validatePolicyOverrides,
+  walletFamilyForChain,
   withPolicy,
 } from '@paycryt/core';
 
@@ -90,6 +95,8 @@ export class PaycrytServer {
   private nextIndex: number;
   private readonly dispatcher?: WebhookDispatcher;
   private readonly merchantDispatchers = new Map<string, WebhookDispatcher>();
+  private readonly walletDerivers = new Map<string, AddressDeriver>();
+  private readonly walletCounters = new Map<string, number>();
   private readonly kv: KVStore;
   private readonly merchants: MerchantStore;
   private readonly receiver: SyncReceiver;
@@ -137,6 +144,10 @@ export class PaycrytServer {
     this.receiver = new SyncReceiver({
       deriver: this.deriver,
       leases: this.leases,
+      // Each tenant's offline payments must derive from THEIR wallet and run under THEIR policy, never the device's own.
+      resolveDeriver: async (op) => this.addressSource(await this.merchantOf(op.request.merchantId), op.request.asset?.chain),
+      policyFor: async (op) => withPolicy(mergePolicyOverrides((await this.merchantOf(op.request.merchantId))?.policy)),
+      lookupRequest: (id) => this.watcher.get(id)?.request,
       onAccepted: async (r) => {
         await this.payments?.save(r);
         this.watcher.watch(r);
@@ -296,6 +307,9 @@ export class PaycrytServer {
         }
         // The tenant comes from who owns the device, never from anything the device claims about itself.
         op.request.merchantId = owner && owner !== ADMIN_OWNER ? owner : undefined;
+        if (op.request.merchantId && !this.config.sandbox && !this.addressSource(await this.merchantOf(op.request.merchantId), op.request.asset?.chain)) {
+          return send(res, 200, { status: 'rejected', reason: 'no wallet is configured for this chain on your merchant account' });
+        }
         const result = await this.receiver.apply(op);
         await this.watcher.tick();
         return send(res, 200, result);
@@ -310,6 +324,7 @@ export class PaycrytServer {
       throw new HttpError(404, 'Not found');
     } catch (err) {
       if (err instanceof HttpError) return send(res, err.status, { error: err.message });
+      if (err instanceof WalletConflictError) return send(res, 409, { error: err.message });
       if (err instanceof SyntaxError) return send(res, 400, { error: 'Invalid JSON' });
       return send(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
     }
@@ -328,7 +343,7 @@ export class PaycrytServer {
       }
       throw new HttpError(405, 'Use GET or POST');
     }
-    const m = /^\/v1\/admin\/merchants\/(mch_[0-9a-f]+)(\/rotate-key|\/disable|\/enable)?$/.exec(path);
+    const m = /^\/v1\/admin\/merchants\/(mch_[0-9a-f]+)(\/rotate-key|\/disable|\/enable|\/wallets)?$/.exec(path);
     if (!m) throw new HttpError(404, 'Not found');
     const id = m[1]!;
     const action = m[2];
@@ -342,12 +357,59 @@ export class PaycrytServer {
       if (!rotated) throw new HttpError(404, 'Unknown merchant');
       return send(res, 200, { merchant: toMerchantView(rotated.merchant), apiKey: rotated.apiKey });
     }
+    if (action === '/wallets' && method === 'POST') {
+      if (typeof json !== 'object' || json === null || Array.isArray(json)) throw new HttpError(400, 'Body must be an object like { "evm": "xpub...", "tron": null }');
+      const merchant = await this.merchants.setWallets(id, json);
+      if (!merchant) throw new HttpError(404, 'Unknown merchant');
+      return send(res, 200, toMerchantView(merchant));
+    }
     if ((action === '/disable' || action === '/enable') && method === 'POST') {
       const merchant = await this.merchants.setDisabled(id, action === '/disable');
       if (!merchant) throw new HttpError(404, 'Unknown merchant');
       return send(res, 200, toMerchantView(merchant));
     }
     throw new HttpError(405, 'Method not allowed');
+  }
+
+  // ------------------------------------------------------------ wallets
+
+  private async merchantOf(id: string | undefined): Promise<Merchant | undefined> {
+    return id ? this.merchants.get(id) : undefined;
+  }
+
+  /** The deriver for this merchant's wallet on `chain`, or undefined if they have none configured. */
+  private addressSource(merchant: Merchant | undefined, chain: string | undefined): AddressDeriver | undefined {
+    const family = chain ? walletFamilyForChain(chain) : undefined;
+    const key = family ? merchant?.wallets?.[family] : undefined;
+    if (!family || !key) return undefined;
+    const cacheKey = `${family}:${key}`;
+    let deriver = this.walletDerivers.get(cacheKey);
+    if (!deriver) {
+      deriver = deriverForWallet(family, key, chain);
+      this.walletDerivers.set(cacheKey, deriver);
+    }
+    return deriver;
+  }
+
+  /**
+   * Next unused derivation index for a merchant's wallet in one family. Resumes after a restart from the
+   * payments already on record, so an address is never handed to two customers. Devices draw from their own
+   * leased ranges, which sit above this server range, so the two can't collide either.
+   */
+  private nextWalletIndex(merchantId: string, family: WalletFamily): number {
+    const key = `${merchantId}:${family}`;
+    let next = this.walletCounters.get(key);
+    if (next === undefined) {
+      next = this.serverLease.start;
+      for (const { request: r } of this.watcher.list()) {
+        if (r.merchantId === merchantId && !r.offline && r.addressIndex !== undefined && walletFamilyForChain(r.asset.chain) === family) {
+          if (r.addressIndex >= this.serverLease.start && r.addressIndex < this.serverLease.end) next = Math.max(next, r.addressIndex + 1);
+        }
+      }
+    }
+    if (next >= this.serverLease.end) throw new HttpError(409, 'This wallet has used all of its server address range');
+    this.walletCounters.set(key, next + 1);
+    return next;
   }
 
   // ------------------------------------------------------------ device ownership
@@ -399,12 +461,20 @@ export class PaycrytServer {
     const policy = withPolicy(mergePolicyOverrides(merchant?.policy, validatePolicyOverrides(input.policy)));
     const metadata = validateMetadata(input.metadata);
 
+    // A merchant's customers pay into that merchant's own wallet. The shared sandbox address source is only a
+    // stand-in for the sandbox; outside it, a merchant with no wallet for this chain can't take payments.
+    const walletDeriver = this.addressSource(merchant, asset.chain);
+    const family = walletFamilyForChain(asset.chain);
+    if (merchant && !walletDeriver && !this.config.sandbox) {
+      throw new HttpError(400, `No ${family ?? asset.chain} wallet is configured on your account, so payments on ${asset.chain} can't be created. Ask the operator to set one.`);
+    }
+
     const snapshot = await this.getSnapshot({ base: asset.symbol, quote: currency.code, direction: 'CRYPTO_TO_FIAT', spreadBps: merchant?.spreadBps });
-    const index = this.nextIndex++;
+    const index = walletDeriver ? this.nextWalletIndex(merchant!.id, family!) : this.nextIndex++;
     const request = createPaymentRequest({
       fiat: { currency: currency.code, amountMinor: parseUnits(String(input.amount), currency.decimals) },
       asset,
-      address: this.deriver.derive(index),
+      address: (walletDeriver ?? this.deriver).derive(index),
       addressIndex: index,
       snapshot,
       policy,
@@ -514,7 +584,7 @@ function validateMetadata(v: unknown): Record<string, string> | undefined {
 
 function validateMerchantInput(v: any) {
   if (typeof v !== 'object' || v === null) throw new HttpError(400, 'Body must be a JSON object');
-  const allowed = ['name', 'webhookUrl', 'webhookSecret', 'spreadBps', 'policy'];
+  const allowed = ['name', 'webhookUrl', 'webhookSecret', 'spreadBps', 'policy', 'wallets'];
   for (const k of Object.keys(v)) if (!allowed.includes(k)) throw new HttpError(400, `Unknown field "${k}". Allowed: ${allowed.join(', ')}`);
   if (typeof v.name !== 'string' || !v.name.trim() || v.name.length > 100) throw new HttpError(400, 'name is required (max 100 characters)');
   if (v.webhookUrl !== undefined) {
@@ -533,6 +603,7 @@ function validateMerchantInput(v: any) {
     webhookSecret: v.webhookSecret as string | undefined,
     spreadBps: v.spreadBps as number | undefined,
     policy: validatePolicyOverrides(v.policy),
+    wallets: v.wallets as Record<string, string> | undefined,
   };
 }
 
