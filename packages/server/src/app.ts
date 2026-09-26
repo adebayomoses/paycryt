@@ -171,6 +171,7 @@ export class PaycrytServer {
       if (config.sandbox) await orchestrator.handle(e);
       void this.deliverWebhook(e);
     });
+    this.watcher.onError((err, ctx) => console.warn(`[paycryt] ${ctx.stage} error for ${ctx.paymentId}: ${err instanceof Error ? err.message : String(err)}`));
 
     this.http = createServer((req, res) => void this.handle(req, res));
   }

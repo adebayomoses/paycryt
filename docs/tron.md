@@ -47,21 +47,24 @@ new TronGridChainAdapter({ fetch, contracts: { USDC: 'TEkxiTehnzSmSe2XqrBj4w32RU
 
 ### Confirmations
 
-TronGrid's transfer endpoint tells you whether a transfer is **solidified** (via `only_confirmed`/`only_unconfirmed`), but not a block-confirmation count. The adapter reports:
+Confirmations are **real**: `chainTip - transactionBlock + 1`, the same as the EVM and Bitcoin adapters. TronGrid's transfer list only says whether a transfer is *solidified* (final), not how deep it is, so the adapter also asks the node for the chain tip (`POST /wallet/getnowblock`) and for each transfer's block (`POST /wallet/gettransactioninfobyid`).
 
-- an unconfirmed transfer as `confirmations: 0`;
-- a solidified one as `confirmations: confirmedWeight` (default **20**).
+- A solidified transfer reports its real depth (never below 1, since solidified is final by definition).
+- An unconfirmed transfer already in a block reports its real, small depth (e.g. 5); one still in the mempool reports 0. So a policy asking for `minConfirmations: 12` now genuinely waits for 12 blocks, where the old fixed weight of 20 would have accepted a 1-block-deep transfer the moment it appeared solidified.
+- **Fallback.** If a lookup fails (a rate-limited or unreachable node), the adapter degrades conservatively instead of failing the whole check: a solidified transfer reports `confirmedWeight` (default 20; safe because solidified is final) and an unconfirmed one reports 0.
 
-Set `confirmedWeight` at or above your `PaymentPolicy.minConfirmations` so solidified deposits actually clear. The default policy's `minConfirmations: 1`, so the default weight of 20 is already well above it.
+Verified against the live API: the adapter's counts for six real USDT transfers matched an independent calculation from the same data (a consistent 3-block offset, which is the tip advancing during the run), and the solidified height sat 19 blocks behind the tip.
+
+**Cost.** Two transfer lists per check, plus, only when there is something to report, one tip lookup (cached ~2.5s, about one block) and one block lookup per transfer not seen before. A solidified transfer's block never changes, so it is looked up once and remembered (up to `blockCacheSize`, default 5000); an unconfirmed one is never cached, since it can still reorganise. In the live run above, the first check made 9 HTTP calls and the second made 3.
 
 ### Rate limits
 
-The public `api.trongrid.io` endpoint is rate-limited per IP; a fresh deposit address makes two calls per poll (confirmed + unconfirmed). Get a free API key from the [TronGrid dashboard](https://www.trongrid.io/) and pass it as `apiKey`, or point `baseUrl` at your own full node.
+The public `api.trongrid.io` endpoint is rate-limited per IP and **will** answer `429` under polling; it did during testing of this very adapter. A fresh deposit address makes two calls per poll, plus the tip and block lookups described above. A rate-limited check throws, and `PaymentWatcher` now isolates that failure (see [payment-policies.md](payment-policies.md#when-a-chain-lookup-fails)): the affected payment is retried next tick and every other payment carries on. Get a free API key from the [TronGrid dashboard](https://www.trongrid.io/) and pass it as `apiKey`, or point `baseUrl` at your own full node.
 
 ### Known limitations
 
 - **No pagination.** `limit` (default 200) is fetched in one request. Fine for one-time deposit addresses, which see very few transfers; raise it or add pagination yourself if you reuse addresses.
-- **No block-level confirmation count** — see above.
+- **No retry inside the adapter.** A `429` surfaces as an error, and the watcher retries on its next tick. If you poll many addresses, use an API key or your own node.
 - Only tested with mocked and live-read HTTP; no live test transaction has been sent through it.
 
 ## Wiring it into the reference server

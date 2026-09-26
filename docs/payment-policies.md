@@ -47,6 +47,17 @@ setInterval(() => watcher.tick(), 5_000);
 
 Events are emitted only when the status, the confirmed amount, or the late-arrived amount changes, and carry a stable `id` so webhook receivers can de-duplicate.
 
+### When a chain lookup fails
+
+Real chain adapters fail sometimes: a rate-limited API (`429`), an unreachable node. One payment's failure never stops the others.
+
+- `tick()` catches a failing lookup per payment, keeps that payment's last known state, and carries on with the rest; the failed one is simply retried next tick.
+- `watcher.get(id).lastError` holds the most recent failure (`{ message, at }`) and is cleared by the next successful check.
+- `watcher.onError((error, { paymentId, stage }) => …)` is called for each failure, where `stage` is `"chain"` (a lookup) or `"handler"` (one of your event handlers threw). Use it for logging and alerting. `PaycrytServer` logs these.
+- A throwing event handler no longer blocks the other handlers or later events, and a throwing error handler can't break the watcher either.
+
+Before this, a single failed lookup aborted the whole `tick()`: every payment after it was skipped and the events already collected were dropped.
+
 ## Catching deposits after finalization (the late-watch window)
 
 A payment reaching a final status (`paid`, `overpaid`, `expired`, `refund_required`, `manual_review`) doesn't mean the watcher stops caring about its address immediately. It keeps polling for `policy.lateWatchMs` (default 24h) past the moment of finalization, specifically to catch a customer who pays after the deadline, or extra stray funds on an address you'd already closed the book on:

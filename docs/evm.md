@@ -27,9 +27,9 @@ Default contracts come from `@paycryt/core`'s `ASSETS` for the given `chain` (US
 new EvmRpcChainAdapter({ fetch, rpcUrl, chain: 'ethereum', contracts: { MYTOKEN: '0x...' } });
 ```
 
-## Confirmations — real, not synthetic
+## Confirmations: real block depth
 
-Unlike the Tron adapter, this one computes actual block-based confirmations: `currentBlock - logBlock + 1`, straight from the chain. No fixed weight to configure.
+Like the Tron and Bitcoin adapters, this one computes actual block-based confirmations: `currentBlock - logBlock + 1`, straight from the chain. No fixed weight to configure.
 
 ## Lookback window
 

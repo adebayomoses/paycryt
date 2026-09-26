@@ -171,3 +171,82 @@ describe('late-watch window (catching deposits after finalization)', () => {
     expect(seen.map((e) => e.type)).toEqual(['payment.expired']); // missed: window already closed
   });
 });
+
+describe('one failure never stops the rest of the tick', () => {
+  /** A chain whose lookups fail for chosen addresses, like a rate-limited or unreachable node. */
+  class FlakyChain extends FakeChain {
+    failing = new Set<string>();
+    override async getDeposits(address: string, assetSymbol: string) {
+      if (this.failing.has(address)) throw new Error(`HTTP 429 for ${address}`);
+      return super.getDeposits(address, assetSymbol);
+    }
+  }
+
+  async function twoPayments() {
+    const clock = makeClock();
+    const a = (await makeRequest(clock)).request;
+    const b = { ...(await makeRequest(clock)).request, id: 'pay_second', address: 'fake:tron:000002' };
+    const chain = new FlakyChain('tron', clock.now);
+    const watcher = new PaymentWatcher([chain], clock.now);
+    const seen: PaymentEvent[] = [];
+    const errors: Array<{ message: string; paymentId: string; stage: string }> = [];
+    watcher.on((e) => void seen.push(e));
+    watcher.onError((err, ctx) => void errors.push({ message: (err as Error).message, ...ctx }));
+    watcher.watch(a);
+    watcher.watch(b);
+    return { a, b, chain, watcher, seen, errors, clock };
+  }
+
+  it('a failing address does not starve the payments after it, and the failure is reported', async () => {
+    const { a, b, chain, watcher, seen, errors } = await twoPayments();
+    chain.failing.add(a.address); // the FIRST payment's lookup fails...
+    chain.scenarios.exact(b); // ...while the second was really paid
+
+    const events = await watcher.tick(); // must not throw
+    expect(events.map((e) => e.paymentId)).toEqual([b.id]); // the second payment still confirmed
+    expect(seen).toHaveLength(1);
+    expect(errors).toEqual([{ message: `HTTP 429 for ${a.address}`, paymentId: a.id, stage: 'chain' }]);
+    expect(watcher.get(a.id)!.lastError?.message).toContain('429');
+    expect(watcher.get(a.id)!.status).toBe('awaiting_payment'); // last known state kept, not corrupted
+  });
+
+  it('retries the failed payment next tick and clears the error once it recovers', async () => {
+    const { a, chain, watcher, seen } = await twoPayments();
+    chain.failing.add(a.address);
+    chain.scenarios.exact(a);
+    await watcher.tick();
+    expect(watcher.get(a.id)!.lastError).toBeDefined();
+    expect(seen).toHaveLength(0);
+
+    chain.failing.delete(a.address); // the node comes back
+    await watcher.tick();
+    expect(watcher.get(a.id)!.lastError).toBeUndefined();
+    expect(seen.map((e) => e.type)).toEqual(['payment.confirmed']);
+  });
+
+  it('a throwing event handler does not block other handlers or later events', async () => {
+    const { a, b, chain, watcher, seen, errors } = await twoPayments();
+    watcher.on(() => {
+      throw new Error('handler blew up');
+    });
+    const second: PaymentEvent[] = [];
+    watcher.on((e) => void second.push(e)); // registered after the broken one
+    chain.scenarios.exact(a);
+    chain.scenarios.exact(b);
+
+    await watcher.tick();
+    expect(seen.map((e) => e.paymentId).sort()).toEqual([a.id, b.id].sort());
+    expect(second).toHaveLength(2);
+    expect(errors.filter((e) => e.stage === 'handler')).toHaveLength(2);
+    expect(errors[0]!.message).toBe('handler blew up');
+  });
+
+  it('a throwing error handler cannot break the watcher either', async () => {
+    const { a, chain, watcher } = await twoPayments();
+    watcher.onError(() => {
+      throw new Error('error handler blew up');
+    });
+    chain.failing.add(a.address);
+    await expect(watcher.tick()).resolves.toEqual([]);
+  });
+});

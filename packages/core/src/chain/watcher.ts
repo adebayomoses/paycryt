@@ -37,7 +37,11 @@ export interface WatchedPayment {
   evaluation: PaymentEvaluation;
   /** When this payment first reached a final status. Undefined while still open. */
   finalizedAt?: number;
+  /** The most recent failure to check this payment's chain, cleared by the next successful check. */
+  lastError?: { message: string; at: number };
 }
+
+export type WatcherErrorHandler = (error: unknown, context: { paymentId: string; stage: 'chain' | 'handler' }) => void;
 
 /**
  * Polls chains for each open payment and emits an event whenever its status changes.
@@ -46,6 +50,7 @@ export interface WatchedPayment {
 export class PaymentWatcher {
   private readonly payments = new Map<string, WatchedPayment>();
   private handlers: Array<(e: PaymentEvent) => void | Promise<void>> = [];
+  private errorHandlers: WatcherErrorHandler[] = [];
   private seq = 0;
 
   constructor(
@@ -73,6 +78,25 @@ export class PaymentWatcher {
   }
 
   /**
+   * Called when checking a payment's chain fails (a rate-limited or unreachable node) or an event handler
+   * throws. One bad payment or handler never stops the others: the tick carries on, and the failed payment
+   * is simply retried on the next tick.
+   */
+  onError(handler: WatcherErrorHandler): void {
+    this.errorHandlers.push(handler);
+  }
+
+  private reportError(error: unknown, paymentId: string, stage: 'chain' | 'handler'): void {
+    for (const h of this.errorHandlers) {
+      try {
+        h(error, { paymentId, stage });
+      } catch {
+        /* an error handler must not break the watcher either */
+      }
+    }
+  }
+
+  /**
    * Re-check every payment that is still open, plus any recently-finalized one still inside its
    * `policy.lateWatchMs` window (so a stray deposit that lands after a payment closed is still caught).
    * Returns the events emitted.
@@ -85,7 +109,15 @@ export class PaymentWatcher {
       if (wasFinal && !this.withinLateWatch(entry, now)) continue; // fully done watching this address
       const chain = this.chains.find((c) => c.chain === entry.request.asset.chain);
       if (!chain) continue;
-      const deposits = await chain.getDeposits(entry.request.address, entry.request.asset.symbol);
+      let deposits;
+      try {
+        deposits = await chain.getDeposits(entry.request.address, entry.request.asset.symbol);
+        entry.lastError = undefined;
+      } catch (err) {
+        entry.lastError = { message: err instanceof Error ? err.message : String(err), at: now };
+        this.reportError(err, entry.request.id, 'chain');
+        continue; // keep the last known state; try again next tick
+      }
       const evaluation = evaluatePayment(entry.request, deposits, now);
       const changed =
         evaluation.status !== entry.status || evaluation.received !== entry.evaluation.received || evaluation.late !== entry.evaluation.late;
@@ -104,7 +136,15 @@ export class PaymentWatcher {
         createdAt: now,
       });
     }
-    for (const e of events) for (const h of this.handlers) await h(e);
+    for (const e of events) {
+      for (const h of this.handlers) {
+        try {
+          await h(e);
+        } catch (err) {
+          this.reportError(err, e.paymentId, 'handler'); // a failing handler doesn't block the others or later events
+        }
+      }
+    }
     return events;
   }
 
