@@ -6,6 +6,25 @@ const clock = () => T0;
 const src = (name: string, price: string) => new StaticRateProvider(name, { 'USDT/NGN': price }, clock);
 
 describe('rate engine', () => {
+  it('two sources that disagree are both refused, and the error shows the real quotes', async () => {
+    // Real-world case: CoinGecko ~1326 and Binance ~1518 NGN per USDT. With two sources the median is the midpoint,
+    // so both sit the same distance from it. Guessing which is right would short-change someone, so it fails closed.
+    const e = new RateEngine({ providers: [src('coingecko', '1326.17'), src('binance', '1518.4')], now: clock });
+    const err = await e.getSnapshot({ base: 'USDT', quote: 'NGN', direction: 'CRYPTO_TO_FIAT' }).then(() => null, (x: Error) => x);
+    expect(err?.message).toMatch(/Only 0 agreeing/);
+    expect(err?.message).toContain('coingecko 1326.17');
+    expect(err?.message).toContain('binance 1518.4');
+    expect(err?.message).toContain('within 300 bps');
+    expect(e.log.all()).toHaveLength(0); // nothing was quoted to anyone
+  });
+
+  it('the operator can widen the tolerance knowingly, and then the median is used', async () => {
+    const e = new RateEngine({ providers: [src('a', '1326.17'), src('b', '1518.4')], maxDeviationBps: 1000, now: clock });
+    const s = await e.getSnapshot({ base: 'USDT', quote: 'NGN', direction: 'CRYPTO_TO_FIAT' });
+    expect(s.quotes).toHaveLength(2);
+    expect(s.rejected).toHaveLength(0);
+  });
+
   it('takes the median of agreeing sources', async () => {
     const e = new RateEngine({ providers: [src('a', '1498'), src('b', '1500'), src('c', '1502')], now: clock });
     const s = await e.getSnapshot({ base: 'USDT', quote: 'NGN', direction: 'CRYPTO_TO_FIAT' });

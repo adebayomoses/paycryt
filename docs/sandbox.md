@@ -1,5 +1,7 @@
 # Local fake-chain sandbox
 
+> **For development only.** The sandbox uses a fake chain and made-up prices, and its simulator endpoints move fake money. It cannot be combined with real chains. To watch real blockchains and real exchange rates, run in live mode: see [live-server.md](live-server.md).
+
 Develop against Paycryt without testnet faucets, RPC keys or waiting for blocks. You decide when deposits arrive, how much, and when they confirm.
 
 ## Run it

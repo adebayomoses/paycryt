@@ -35,6 +35,12 @@ export interface PaymentRequest {
   metadata?: Record<string, string>;
   /** The merchant (tenant) this payment belongs to, when the server is multi-tenant. */
   merchantId?: string;
+  /**
+   * Transaction ids already at `address` when it was issued. They are ignored, so old funds on a reused or
+   * imported address can never pay this request. Only capturable for online requests, before the address
+   * is shown to a customer; an offline device can't know it, and relies on `policy.backdateToleranceMs`.
+   */
+  baselineTxIds?: string[];
 }
 
 export type CurrencyLike = Currency;

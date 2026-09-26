@@ -158,3 +158,53 @@ describe('policy override validation and merging', () => {
     expect(withPolicy(merged).overpayment).toEqual({ toleranceBps: 50, action: 'credit' });
   });
 });
+
+describe('funds that were at the address before the request existed', () => {
+  const USDT = (n: number) => BigInt(Math.round(n * 1e6));
+  const HOUR = 3_600_000;
+
+  it('a deposit long before the request was created never pays it (an imported wallet with history)', async () => {
+    const { request, clock } = await makeRequest();
+    const old = dep(request, USDT(10), 500, request.createdAt - 24 * HOUR); // a day-old payment to a reused address
+    const e = evaluatePayment(request, [old], clock.now());
+    expect(e.status).toBe('awaiting_payment');
+    expect(e.received).toBe(0n);
+    expect(e.late).toBe(0n); // and it is not misread as a late payment to refund either
+  });
+
+  it('tolerates block timestamps that run a little behind the wall clock, so a real payment is not dropped', async () => {
+    const { request, clock } = await makeRequest();
+    const skewed = dep(request, USDT(10), 1, request.createdAt - 30 * 60_000); // stamped 30 min "early", well inside the 3h default
+    expect(evaluatePayment(request, [skewed], clock.now()).status).toBe('paid');
+    const tooOld = dep(request, USDT(10), 1, request.createdAt - 4 * HOUR);
+    expect(evaluatePayment(request, [tooOld], clock.now()).status).toBe('awaiting_payment');
+  });
+
+  it('the tolerance is a policy setting, including zero', async () => {
+    const strict = await makeRequest(undefined, withPolicy({ backdateToleranceMs: 0 }));
+    const oneSecondBefore = dep(strict.request, USDT(10), 1, strict.request.createdAt - 1_000);
+    expect(evaluatePayment(strict.request, [oneSecondBefore], strict.clock.now()).status).toBe('awaiting_payment');
+
+    const loose = await makeRequest(undefined, withPolicy({ backdateToleranceMs: 48 * HOUR }));
+    const dayBefore = dep(loose.request, USDT(10), 1, loose.request.createdAt - 24 * HOUR);
+    expect(evaluatePayment(loose.request, [dayBefore], loose.clock.now()).status).toBe('paid');
+  });
+
+  it('baselineTxIds ignore exactly the deposits already present, however recent, and nothing else', async () => {
+    const { request, clock } = await makeRequest();
+    const already = dep(request, USDT(10), 1, request.createdAt - 60_000); // one minute before: inside the tolerance, so only the baseline can exclude it
+    const withBaseline = { ...request, baselineTxIds: [already.txId] };
+    expect(evaluatePayment(withBaseline, [already], clock.now()).status).toBe('awaiting_payment');
+
+    const real = dep(request, USDT(10), 1, clock.now());
+    const both = evaluatePayment(withBaseline, [already, real], clock.now());
+    expect(both.status).toBe('paid');
+    expect(both.received).toBe(USDT(10)); // only the new one counted, not 20
+  });
+
+  it('validates the new policy field', () => {
+    expect(validatePolicyOverrides({ backdateToleranceMs: 60_000 })).toEqual({ backdateToleranceMs: 60_000 });
+    expect(() => validatePolicyOverrides({ backdateToleranceMs: -1 })).toThrow(/backdateToleranceMs/);
+    expect(() => validatePolicyOverrides({ backdateToleranceMs: 30 * 24 * HOUR })).toThrow(/backdateToleranceMs/);
+  });
+});

@@ -250,3 +250,132 @@ describe('one failure never stops the rest of the tick', () => {
     await expect(watcher.tick()).resolves.toEqual([]);
   });
 });
+
+describe('ticks are serialised and can check payments in parallel', () => {
+  /** A chain with slow lookups that records how many are in flight at once. */
+  class SlowChain extends FakeChain {
+    inFlight = 0;
+    maxInFlight = 0;
+    perAddress = new Map<string, number>();
+    maxPerAddress = 0;
+    lookups = 0;
+    constructor(private readonly delayMs: number, clock: () => number) {
+      super('tron', clock);
+    }
+    override async getDeposits(address: string, assetSymbol: string) {
+      this.lookups++;
+      this.inFlight++;
+      this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+      const same = (this.perAddress.get(address) ?? 0) + 1;
+      this.perAddress.set(address, same);
+      this.maxPerAddress = Math.max(this.maxPerAddress, same);
+      await new Promise((r) => setTimeout(r, this.delayMs));
+      const out = await super.getDeposits(address, assetSymbol);
+      this.inFlight--;
+      this.perAddress.set(address, same - 1);
+      return out;
+    }
+  }
+
+  async function many(n: number, options?: { concurrency?: number }, delayMs = 15) {
+    const clock = makeClock();
+    const chain = new SlowChain(delayMs, clock.now);
+    const watcher = new PaymentWatcher([chain], clock.now, options);
+    const seen: PaymentEvent[] = [];
+    watcher.on((e) => void seen.push(e));
+    const requests = [];
+    for (let i = 0; i < n; i++) {
+      const { request } = await makeRequest(clock);
+      const r = { ...request, id: `pay_${i}`, address: `fake:tron:${String(i).padStart(6, '0')}` };
+      watcher.watch(r);
+      requests.push(r);
+    }
+    return { clock, chain, watcher, seen, requests };
+  }
+
+  it('overlapping ticks never check the same payment at the same time', async () => {
+    const { chain, watcher, seen, requests } = await many(3);
+    chain.scenarios.exact(requests[0]!);
+    // A timer firing faster than the chain answers: five ticks launched back to back.
+    const results = await Promise.all([watcher.tick(), watcher.tick(), watcher.tick(), watcher.tick(), watcher.tick()]);
+    expect(chain.maxPerAddress).toBe(1);
+    expect(seen.map((e) => e.type)).toEqual(['payment.confirmed']);
+    expect(results.flat()).toHaveLength(1); // only one of the ticks reports it
+  });
+
+  it('an older, slower lookup cannot overwrite a newer result with a stale view', async () => {
+    // The first lookup starts BEFORE the deposit and is slow; the second starts after it and is fast. Unserialised,
+    // the fast one settles the payment and then the slow, stale one drags it back to awaiting_payment.
+    const clock = makeClock();
+    const { request } = await makeRequest(clock);
+    let call = 0;
+    class Reordered extends FakeChain {
+      override async getDeposits(address: string, symbol: string) {
+        const mine = ++call;
+        const snapshotAtStart = await super.getDeposits(address, symbol); // what the chain looked like when this lookup began
+        await new Promise((r) => setTimeout(r, mine === 1 ? 80 : 5));
+        return snapshotAtStart;
+      }
+    }
+    const chain = new Reordered('tron', clock.now);
+    const watcher = new PaymentWatcher([chain], clock.now);
+    const seen: PaymentEvent[] = [];
+    watcher.on((e) => void seen.push(e));
+    watcher.watch(request);
+
+    const stale = watcher.tick(); // begins now: sees no deposit, returns after 80ms
+    await new Promise((r) => setTimeout(r, 10));
+    chain.scenarios.exact(request); // the customer pays while that lookup is in flight
+    const fresh = watcher.tick(); // begins after the payment: would return after 5ms
+    await Promise.all([stale, fresh]);
+
+    expect(watcher.get(request.id)!.status).toBe('paid'); // never regressed
+    expect(seen.map((e) => e.type)).toEqual(['payment.confirmed']);
+  });
+
+  it('a tick that starts after a change sees that change, even while another tick is running', async () => {
+    const { chain, watcher, seen, requests } = await many(1);
+    const first = watcher.tick(); // already running...
+    chain.scenarios.exact(requests[0]!); // ...when the deposit lands
+    const second = watcher.tick(); // queued behind it
+    await Promise.all([first, second]);
+    expect(seen.map((e) => e.type)).toEqual(['payment.confirmed']);
+  });
+
+  it('runs one lookup at a time by default (deterministic), and up to the limit when asked', async () => {
+    const serial = await many(6);
+    await serial.watcher.tick();
+    expect(serial.chain.maxInFlight).toBe(1);
+
+    const parallel = await many(6, { concurrency: 3 });
+    await parallel.watcher.tick();
+    expect(parallel.chain.maxInFlight).toBe(3); // three at once, never more: proves the limit without depending on wall-clock time
+    expect(parallel.chain.lookups).toBe(6);
+  });
+
+  it('parallel checking still isolates a failure and still reports every result', async () => {
+    const { chain, watcher, seen, requests } = await many(4, { concurrency: 4 });
+    const original = chain.getDeposits.bind(chain);
+    chain.getDeposits = async (address, symbol) => {
+      if (address === requests[1]!.address) throw new Error('HTTP 429');
+      return original(address, symbol);
+    };
+    for (const i of [0, 2, 3]) chain.scenarios.exact(requests[i]!);
+    const errors: string[] = [];
+    watcher.onError((e) => void errors.push((e as Error).message));
+    await watcher.tick();
+    expect(seen.map((e) => e.paymentId).sort()).toEqual(['pay_0', 'pay_2', 'pay_3']);
+    expect(errors).toEqual(['HTTP 429']);
+  });
+
+  it('a tick that throws internally does not wedge the queue for later ticks', async () => {
+    const { chain, watcher, seen, requests } = await many(1);
+    watcher.on(() => {
+      throw new Error('handler exploded');
+    });
+    chain.scenarios.exact(requests[0]!);
+    await expect(watcher.tick()).resolves.toBeDefined(); // handler errors are isolated
+    await expect(watcher.tick()).resolves.toEqual([]); // and the next tick runs normally
+    expect(seen).toHaveLength(1);
+  });
+});

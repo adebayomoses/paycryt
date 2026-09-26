@@ -99,7 +99,7 @@ Merchants, key hashes and device ownership live in the same `store` as everythin
 
 ## Known limitations
 
-- **The chain is still the fake chain.** Per-merchant wallets make addresses real-format and merchant-owned, but `PaycrytServer` still watches the sandbox `FakeChain`. For real deposits, build your own server around `@paycryt/core` with a real chain adapter (see [tron.md](tron.md), [evm.md](evm.md), [bitcoin.md](bitcoin.md)); the wallet and tenant logic carries over.
+- **Sandbox vs live.** In sandbox mode (the default) the server watches a `FakeChain`, so wallets give real-format, merchant-owned addresses but no real deposits arrive. With `PAYCRYT_SANDBOX=false` it watches the real chains you configure (Tron, EVM, Bitcoin) and real exchange rates; see [live-server.md](live-server.md).
 - **Address discovery gap.** The server does not check the chain for a merchant's past use of a wallet before starting at index 0. If you reuse an xpub that already received funds elsewhere, you will start on addresses that may have history.
 - **No rate limiting or audit log of admin actions** yet.
 - **`webhookUrl` is not filtered for private addresses.** Only the admin sets it, so this is an operator trust decision. If you let merchants set their own, add an SSRF allow/deny check first.

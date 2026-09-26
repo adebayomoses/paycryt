@@ -3,6 +3,7 @@ import {
   ASSETS,
   type AddressDeriver,
   type Asset,
+  type ChainAdapter,
   CURRENCIES,
   type ChainDeposit,
   type Currency,
@@ -19,6 +20,7 @@ import {
   PaymentRequestStore,
   PaymentWatcher,
   RateEngine,
+  type RateProvider,
   type RateSnapshot,
   RateSnapshotStore,
   SettlementOrchestrator,
@@ -50,8 +52,25 @@ export interface ServerConfig {
   spreadBps?: number;
   /** Enables /v1/sandbox/* (fake deposits, mining, time travel, rate changes). Never enable in production. */
   sandbox?: boolean;
-  /** Starting sandbox prices (fiat per asset), e.g. { 'USDT/NGN': '1500' }. */
+  /** Starting sandbox prices (fiat per asset), e.g. { 'USDT/NGN': '1500' }. Sandbox only. */
   sandboxPrices?: Record<string, string>;
+  /**
+   * LIVE MODE (`sandbox: false`) needs real chain watchers here, one per chain you accept, e.g.
+   * `TronGridChainAdapter`, `EvmRpcChainAdapter`, `EsploraChainAdapter` from @paycryt/adapters. Live mode
+   * refuses to start without them, so a live server can never quietly run on the fake chain and accept
+   * payments that will never confirm. Not allowed in sandbox mode, which supplies its own fake chains.
+   */
+  chains?: ChainAdapter[];
+  /** Live exchange-rate sources (median-combined). Required in live mode; not allowed in sandbox mode. */
+  rateProviders?: RateProvider[];
+  /** Minimum agreeing rate sources before a price is issued. Default 1. */
+  minRateSources?: number;
+  /** How far a rate source may sit from the median of the sources before it is dropped as an outlier. Default 300 (3%). */
+  maxRateDeviationBps?: number;
+  /** How often to check the chain for deposits. Default 1s in the sandbox, 5s live. */
+  pollIntervalMs?: number;
+  /** How many payments to check in parallel per poll. Default 1 in the sandbox, 4 live. */
+  pollConcurrency?: number;
   /**
    * Persist payments, the rate audit trail and address leases here (e.g. `new SqliteStore(path)` from
    * @paycryt/adapters) so they survive a restart. Omit it to run fully in-memory, as before — nothing
@@ -85,7 +104,9 @@ export class PaycrytServer {
   readonly engine: RateEngine;
   readonly watcher: PaymentWatcher;
   readonly leases: LeaseRegistry;
-  readonly chains = new Map<string, FakeChain>();
+  readonly chains = new Map<string, ChainAdapter>();
+  private readonly fakeChains = new Map<string, FakeChain>();
+  private lastTick?: { at: number; ms: number };
   readonly events: PaymentEvent[] = [];
   readonly settlement = new MockSettlementProvider();
   readonly prices: StaticRateProvider[];
@@ -111,18 +132,40 @@ export class PaycrytServer {
     restored: { leases: LeaseRegistry; snapshots: RateSnapshot[]; requests: PaymentRequest[] },
   ) {
     const now = () => this.now();
+    const sandbox = !!config.sandbox;
+    if (sandbox && (config.chains || config.rateProviders)) {
+      throw new Error('Sandbox mode uses its own fake chains and static prices. To use real chains or rate sources, set sandbox: false.');
+    }
+    if (!sandbox && (!config.chains?.length || !config.rateProviders?.length)) {
+      throw new Error(
+        'Live mode (sandbox: false) needs `chains` (real chain watchers) and `rateProviders` (real exchange-rate sources). Refusing to start on fake chains or made-up prices. Use sandbox: true for local development.',
+      );
+    }
     const seed = config.sandboxPrices ?? { 'USDT/NGN': '1500', 'USDC/NGN': '1500', 'BTC/NGN': '150000000', 'USDT/GHS': '15', 'USDT/KES': '129' };
     // Two slightly different sources so the sandbox demonstrates median + outlier rejection.
-    this.prices = [
-      new StaticRateProvider('sandbox-exchange', seed, now),
-      new StaticRateProvider('sandbox-parallel', Object.fromEntries(Object.entries(seed).map(([k, v]) => [k, (Number(v) * 1.002).toString()])), now),
-    ];
-    this.engine = new RateEngine({ providers: this.prices, spreadBps: config.spreadBps ?? 100, now });
+    this.prices = sandbox
+      ? [
+          new StaticRateProvider('sandbox-exchange', seed, now),
+          new StaticRateProvider('sandbox-parallel', Object.fromEntries(Object.entries(seed).map(([k, v]) => [k, (Number(v) * 1.002).toString()])), now),
+        ]
+      : [];
+    this.engine = new RateEngine({ providers: sandbox ? this.prices : config.rateProviders!, spreadBps: config.spreadBps ?? 100, minSources: config.minRateSources, maxDeviationBps: config.maxRateDeviationBps, now });
     for (const s of restored.snapshots) this.engine.log.append(s); // restores the hash chain, in the order it was appended
     if (!this.engine.log.verify().ok) console.warn('[paycryt] restored rate audit trail failed verification — the persisted store may be corrupted or tampered.');
 
-    for (const c of CHAINS) this.chains.set(c, new FakeChain(c, now));
-    this.watcher = new PaymentWatcher([...this.chains.values()], now);
+    if (sandbox) {
+      for (const c of CHAINS) {
+        const fake = new FakeChain(c, now);
+        this.fakeChains.set(c, fake);
+        this.chains.set(c, fake);
+      }
+    } else {
+      for (const c of config.chains!) {
+        if (this.chains.has(c.chain)) throw new Error(`Two chain adapters were given for "${c.chain}"; use one per chain.`);
+        this.chains.set(c.chain, c);
+      }
+    }
+    this.watcher = new PaymentWatcher([...this.chains.values()], now, { concurrency: config.pollConcurrency ?? (sandbox ? 1 : 4) });
 
     this.leases = restored.leases;
     this.serverLease = this.leases.allocate('server', 1_000_000);
@@ -199,11 +242,22 @@ export class PaycrytServer {
   listen(port: number, host = '127.0.0.1'): Promise<number> {
     return new Promise((resolve) => {
       this.http.listen(port, host, () => {
-        this.ticker = setInterval(() => void this.watcher.tick(), 1_000);
+        this.ticker = setInterval(() => void this.poll(), this.config.pollIntervalMs ?? (this.config.sandbox ? 1_000 : 5_000));
         this.ticker.unref();
         resolve((this.http.address() as { port: number }).port);
       });
     });
+  }
+
+  /** One timed check of every open payment. Ticks are serialised by the watcher, so a slow poll never overlaps the next. */
+  private async poll(): Promise<void> {
+    const started = Date.now();
+    try {
+      await this.watcher.tick();
+      this.lastTick = { at: this.now(), ms: Date.now() - started };
+    } catch (err) {
+      console.warn(`[paycryt] poll failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   close(): Promise<void> {
@@ -238,12 +292,17 @@ export class PaycrytServer {
       const path = url.pathname.replace(/\/+$/, '') || '/';
       const method = req.method ?? 'GET';
 
-      if (method === 'GET' && path === '/health') return send(res, 200, { ok: true, sandbox: !!this.config.sandbox });
+      if (method === 'GET' && path === '/health') return send(res, 200, { ok: true, sandbox: !!this.config.sandbox, mode: this.config.sandbox ? 'sandbox' : 'live' });
 
       const auth = await this.authenticate(req);
 
       const body = method === 'POST' ? await readBody(req) : '';
       const json = body ? (JSON.parse(body) as any) : {};
+
+      if (method === 'GET' && path === '/v1/status') {
+        this.requireAdmin(auth);
+        return send(res, 200, this.status());
+      }
 
       if (method === 'GET' && path === '/v1/me') {
         return send(res, 200, auth.role === 'admin' ? { role: 'admin' } : { role: 'merchant', merchant: toMerchantView(auth.merchant) });
@@ -308,7 +367,7 @@ export class PaycrytServer {
         }
         // The tenant comes from who owns the device, never from anything the device claims about itself.
         op.request.merchantId = owner && owner !== ADMIN_OWNER ? owner : undefined;
-        if (op.request.merchantId && !this.config.sandbox && !this.addressSource(await this.merchantOf(op.request.merchantId), op.request.asset?.chain)) {
+        if (!this.config.sandbox && !this.addressSource(await this.merchantOf(op.request.merchantId), op.request.asset?.chain)) {
           return send(res, 200, { status: 'rejected', reason: 'no wallet is configured for this chain on your merchant account' });
         }
         const result = await this.receiver.apply(op);
@@ -466,16 +525,20 @@ export class PaycrytServer {
     // stand-in for the sandbox; outside it, a merchant with no wallet for this chain can't take payments.
     const walletDeriver = this.addressSource(merchant, asset.chain);
     const family = walletFamilyForChain(asset.chain);
-    if (merchant && !walletDeriver && !this.config.sandbox) {
-      throw new HttpError(400, `No ${family ?? asset.chain} wallet is configured on your account, so payments on ${asset.chain} can't be created. Ask the operator to set one.`);
+    if (!walletDeriver && !this.config.sandbox) {
+      throw new HttpError(
+        400,
+        merchant
+          ? `No ${family ?? asset.chain} wallet is configured on your account, so payments on ${asset.chain} can't be created. Ask the operator to set one.`
+          : 'Live payments are created with a merchant API key that has a wallet; the admin key has none to pay into.',
+      );
     }
 
     const snapshot = await this.getSnapshot({ base: asset.symbol, quote: currency.code, direction: 'CRYPTO_TO_FIAT', spreadBps: merchant?.spreadBps });
-    const index = walletDeriver ? this.nextWalletIndex(merchant!.id, family!) : this.nextIndex++;
-    const request = createPaymentRequest({
+    const { index, address } = await this.issueAddress(chain, asset, walletDeriver, merchant, family);    const request = createPaymentRequest({
       fiat: { currency: currency.code, amountMinor: parseUnits(String(input.amount), currency.decimals) },
       asset,
-      address: (walletDeriver ?? this.deriver).derive(index),
+      address,
       addressIndex: index,
       snapshot,
       policy,
@@ -488,6 +551,45 @@ export class PaycrytServer {
     return view(this.watcher.get(request.id)!);
   }
 
+  /**
+   * Picks the next deposit address, skipping any that already have funds on chain. A merchant importing a
+   * wallet with history would otherwise be handed used addresses, and a payment must never be "paid" by old
+   * money. Gives up after a run of used addresses, as wallets do with their gap limit.
+   */
+  private async issueAddress(chain: ChainAdapter, asset: Asset, walletDeriver: AddressDeriver | undefined, merchant: Merchant | undefined, family: WalletFamily | undefined) {
+    const MAX_USED_IN_A_ROW = 20;
+    for (let attempt = 0; attempt < MAX_USED_IN_A_ROW; attempt++) {
+      const index = walletDeriver ? this.nextWalletIndex(merchant!.id, family!) : this.nextIndex++;
+      const address = (walletDeriver ?? this.deriver).derive(index);
+      let existing;
+      try {
+        existing = await chain.getDeposits(address, asset.symbol);
+      } catch (err) {
+        // If we can't tell whether the address is unused, don't hand it to a customer.
+        throw new HttpError(503, `Could not confirm that the deposit address is unused (${err instanceof Error ? err.message : String(err)}). Try again shortly.`);
+      }
+      if (existing.length === 0) return { index, address };
+    }
+    throw new HttpError(409, `The last ${MAX_USED_IN_A_ROW} addresses in this wallet already have funds. Use a fresh wallet, or ask the operator to check it.`);
+  }
+
+  /** Operator view: is the server healthy and is it actually keeping up with the chain? */
+  private status() {
+    const all = this.watcher.list();
+    const byStatus: Record<string, number> = {};
+    for (const w of all) byStatus[w.status] = (byStatus[w.status] ?? 0) + 1;
+    return {
+      mode: this.config.sandbox ? 'sandbox' : 'live',
+      chains: [...this.chains.keys()],
+      rateSources: this.config.sandbox ? this.prices.map((p) => p.name) : this.config.rateProviders!.map((p) => p.name),
+      pollIntervalMs: this.config.pollIntervalMs ?? (this.config.sandbox ? 1_000 : 5_000),
+      lastPoll: this.lastTick ? { at: this.lastTick.at, tookMs: this.lastTick.ms, agoMs: this.now() - this.lastTick.at } : null,
+      payments: { total: all.length, byStatus },
+      // Payments whose chain check is failing right now (rate-limited or unreachable node). Empty is healthy.
+      chainErrors: all.filter((w) => w.lastError).map((w) => ({ paymentId: w.request.id, chain: w.request.asset.chain, ...w.lastError })),
+    };
+  }
+
   private getPayment(id: string, auth: Auth) {
     const w = this.watcher.get(id);
     // Someone else's payment answers exactly like one that doesn't exist, so ids can't be probed.
@@ -497,7 +599,12 @@ export class PaycrytServer {
 
   /** Fetches a fresh snapshot and, if a store is configured, persists it to the durable rate-audit chain. */
   private async getSnapshot(req: Parameters<RateEngine['getSnapshot']>[0]): Promise<RateSnapshot> {
-    const snapshot = await this.engine.getSnapshot(req);
+    let snapshot: RateSnapshot;
+    try {
+      snapshot = await this.engine.getSnapshot(req);
+    } catch (err) {
+      throw new HttpError(503, `No exchange rate available right now: ${err instanceof Error ? err.message : String(err)}`);
+    }
     await this.snapshots?.append(snapshot);
     return snapshot;
   }
@@ -525,7 +632,8 @@ export class PaycrytServer {
     if (path === '/v1/sandbox/deposit') {
       const w = this.watcher.get(String(json.paymentId));
       if (!w || !this.canSee(auth, w.request)) throw new HttpError(404, 'Unknown payment');
-      const chain = this.chains.get(w.request.asset.chain)!;
+      const chain = this.fakeChains.get(w.request.asset.chain);
+      if (!chain) throw new HttpError(400, 'Simulated deposits need the sandbox fake chain');
       const s = chain.scenarios;
       const scenario = String(json.scenario ?? 'exact');
       const deposits: ChainDeposit[] =
@@ -541,7 +649,7 @@ export class PaycrytServer {
     // The rest change global state (every tenant's chain, clock and market), so they are operator-only.
     this.requireAdmin(auth);
     if (path === '/v1/sandbox/mine') {
-      for (const c of this.chains.values()) c.mine(Number(json.blocks ?? 1));
+      for (const c of this.fakeChains.values()) c.mine(Number(json.blocks ?? 1));
       return { mined: Number(json.blocks ?? 1) };
     }
     if (path === '/v1/sandbox/time') {

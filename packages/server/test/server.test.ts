@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ASSETS, FakeChain, MemoryStore, OfflinePOS, toJson, verifyChain, type KVStore, type RateSnapshot, type SyncOp, type SyncResponse } from '@paycryt/core';
 import { SqliteStore } from '@paycryt/adapters';
 import { PaycrytServer } from '@paycryt/server';
+import { liveOptions } from './live-helpers.js';
 
 let server: PaycrytServer;
 let base: string;
@@ -103,7 +104,7 @@ describe('reference server + sandbox', () => {
   });
 
   it('sandbox can be disabled', async () => {
-    const prod = await PaycrytServer.create({ apiKey: KEY, sandbox: false });
+    const prod = await PaycrytServer.create({ apiKey: KEY, ...liveOptions() });
     const url = `http://127.0.0.1:${await prod.listen(0)}`;
     const res = await fetch(`${url}/v1/sandbox/mine`, { method: 'POST', headers: { authorization: `Bearer ${KEY}` }, body: '{}' });
     expect(res.status).toBe(404);

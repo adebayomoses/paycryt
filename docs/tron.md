@@ -69,10 +69,13 @@ The public `api.trongrid.io` endpoint is rate-limited per IP and **will** answer
 
 ## Wiring it into the reference server
 
-The bundled `PaycrytServer` (`@paycryt/server`) always uses `FakeChain` — it's a sandbox by design. To go live, build your own thin server around `@paycryt/core` (or fork `packages/server/src/app.ts`) and swap the chain adapter:
+The bundled server uses `FakeChain` in sandbox mode. To use this adapter, run it live: `PAYCRYT_SANDBOX=false PAYCRYT_CHAINS=tron TRONGRID_API_KEY=...` (see [live-server.md](live-server.md)). If you are embedding `PaycrytServer` in your own code, pass the adapter yourself:
 
 ```ts
-const chains = [new TronGridChainAdapter({ fetch, apiKey: process.env.TRONGRID_API_KEY })];
-const watcher = new PaymentWatcher(chains);
-// createPaymentRequest(...) with asset: ASSETS.USDT_TRC20, address: new TronXpubDeriver(xpub).derive(index)
+const server = await PaycrytServer.create({
+  apiKey, sandbox: false, store: new SqliteStore('paycryt.db'),
+  chains: [new TronGridChainAdapter({ fetch, apiKey: process.env.TRONGRID_API_KEY })],
+  rateProviders: [new CoinGeckoRateProvider(fetch)],
+});
+// Lower level: PaymentWatcher([chain]) with createPaymentRequest(...), asset ASSETS.USDT_TRC20 and TronXpubDeriver(xpub).derive(index)
 ```

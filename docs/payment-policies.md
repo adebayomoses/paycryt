@@ -18,6 +18,7 @@ withPolicy({
   overpayment:  { toleranceBps: 50, action: 'credit' },     // 'keep' | 'credit' | 'refund' | 'manual_review'
   latePayment: 'refund',                                    // 'refund' | 'manual_review'
   lateWatchMs: 24 * 60 * 60_000,                             // how long PaymentWatcher keeps polling after finalization
+  backdateToleranceMs: 3 * 60 * 60_000,                      // see "Funds that were already at the address"
 });
 ```
 
@@ -57,6 +58,15 @@ Real chain adapters fail sometimes: a rate-limited API (`429`), an unreachable n
 - A throwing event handler no longer blocks the other handlers or later events, and a throwing error handler can't break the watcher either.
 
 Before this, a single failed lookup aborted the whole `tick()`: every payment after it was skipped and the events already collected were dropped.
+
+## Funds that were already at the address
+
+A payment must only be credited with money sent *for it*. Two things guard that:
+
+- **Baseline.** `PaymentRequest.baselineTxIds` lists transactions already at the address when the request was created. Those are never counted. The live server sets it, and it also skips any address that already has funds, so a fresh request normally starts empty.
+- **Backdate tolerance.** A deposit whose chain timestamp is earlier than `createdAt - backdateToleranceMs` (default 3 hours, range 0 to 7 days) is ignored. It exists for offline POS: a device may create a request while offline and sync later, and the customer's payment can then legitimately predate the server's record. The tolerance is deliberately bounded so that old funds cannot be claimed by a new request.
+
+Both are applied in `evaluatePayment`, so they hold however the request reached the server.
 
 ## Catching deposits after finalization (the late-watch window)
 

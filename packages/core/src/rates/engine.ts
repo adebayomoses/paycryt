@@ -105,7 +105,11 @@ export class RateEngine {
       return true;
     });
     if (accepted.length < this.o.minSources) {
-      throw new Error(`Only ${accepted.length} agreeing rate source(s) for ${req.base}/${req.quote}, need ${this.o.minSources}`);
+      // Say what the sources actually quoted. "0 agreeing" alone hides the real story, e.g. two sources 14% apart.
+      const quoted = candidates.map((c) => `${c.quote.source} ${rateToString(c.price)}`).join(', ');
+      throw new Error(
+        `Only ${accepted.length} agreeing rate source(s) for ${req.base}/${req.quote}, need ${this.o.minSources}. Quotes: ${quoted}; sources must be within ${this.o.maxDeviationBps} bps of their median`,
+      );
     }
 
     const mid = medianBigint(accepted.map((c) => c.price));

@@ -18,6 +18,7 @@ import {
   type SyncResponse,
 } from '@paycryt/core';
 import { PaycrytServer } from '@paycryt/server';
+import { liveOptions } from './live-helpers.js';
 
 // Two unrelated development mnemonics. Never use either for real funds.
 const DEV_A = 'test test test test test test test test test test test junk';
@@ -103,7 +104,7 @@ describe("deposit addresses come from the merchant's own wallet", () => {
   });
 
   it('outside the sandbox, a merchant with no wallet for the chain cannot take payments; one with a wallet can', async () => {
-    const prod = await PaycrytServer.create({ apiKey: ADMIN, sandbox: false });
+    const prod = await PaycrytServer.create({ apiKey: ADMIN, ...liveOptions() });
     const url = `http://127.0.0.1:${await prod.listen(0)}`;
     try {
       const bare = await newMerchant('Bare', {}, url);
@@ -297,7 +298,7 @@ describe('offline devices are held to the merchant wallet and to the server poli
   });
 
   it('outside the sandbox, a merchant without a wallet cannot sync devices either', async () => {
-    const prod = await PaycrytServer.create({ apiKey: ADMIN, sandbox: false });
+    const prod = await PaycrytServer.create({ apiKey: ADMIN, ...liveOptions() });
     const url = `http://127.0.0.1:${await prod.listen(0)}`;
     try {
       const bare = await newMerchant('Bare', {}, url);

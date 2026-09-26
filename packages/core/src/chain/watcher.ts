@@ -53,10 +53,16 @@ export class PaymentWatcher {
   private errorHandlers: WatcherErrorHandler[] = [];
   private seq = 0;
 
+  private tickQueue: Promise<unknown> = Promise.resolve();
+  private readonly concurrency: number;
+
   constructor(
     private readonly chains: ChainAdapter[],
     private readonly clock: () => number = Date.now,
-  ) {}
+    options: { concurrency?: number } = {},
+  ) {
+    this.concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
+  }
 
   watch(request: PaymentRequest): void {
     if (this.payments.has(request.id)) return;
@@ -101,14 +107,28 @@ export class PaymentWatcher {
    * `policy.lateWatchMs` window (so a stray deposit that lands after a payment closed is still caught).
    * Returns the events emitted.
    */
-  async tick(): Promise<PaymentEvent[]> {
+  tick(): Promise<PaymentEvent[]> {
+    // Ticks run one at a time. A real chain check can take seconds and callers fire ticks on a timer, so
+    // overlapping ticks would (1) pile up unbounded concurrent requests against a slow or rate-limited API, and
+    // (2) let an older lookup finish AFTER a newer one and overwrite fresh state with a stale view, e.g. a payment
+    // already seen as paid regressing to awaiting_payment. A caller that awaits its tick after making a change
+    // still gets a full pass that starts after the change.
+    const run = this.tickQueue.then(() => this.runTick());
+    this.tickQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async runTick(): Promise<PaymentEvent[]> {
     const events: PaymentEvent[] = [];
     const now = this.clock();
-    for (const entry of this.payments.values()) {
+    const due = [...this.payments.values()].filter((entry) => !isFinal(entry.status) || this.withinLateWatch(entry, now));
+    await forEachLimited(due, this.concurrency, async (entry) => {
       const wasFinal = isFinal(entry.status);
-      if (wasFinal && !this.withinLateWatch(entry, now)) continue; // fully done watching this address
       const chain = this.chains.find((c) => c.chain === entry.request.asset.chain);
-      if (!chain) continue;
+      if (!chain) return;
       let deposits;
       try {
         deposits = await chain.getDeposits(entry.request.address, entry.request.asset.symbol);
@@ -116,17 +136,17 @@ export class PaymentWatcher {
       } catch (err) {
         entry.lastError = { message: err instanceof Error ? err.message : String(err), at: now };
         this.reportError(err, entry.request.id, 'chain');
-        continue; // keep the last known state; try again next tick
+        return; // keep the last known state; try again next tick
       }
       const evaluation = evaluatePayment(entry.request, deposits, now);
       const changed =
         evaluation.status !== entry.status || evaluation.received !== entry.evaluation.received || evaluation.late !== entry.evaluation.late;
       entry.evaluation = evaluation;
-      if (!changed) continue;
+      if (!changed) return;
       entry.status = evaluation.status;
       if (!wasFinal && isFinal(evaluation.status)) entry.finalizedAt = now; // start the late-watch window from the first finalization
       const type = EVENT_FOR_STATUS[evaluation.status];
-      if (!type) continue;
+      if (!type) return;
       events.push({
         id: `evt_${entry.request.id}_${++this.seq}`,
         type,
@@ -135,7 +155,7 @@ export class PaymentWatcher {
         evaluation,
         createdAt: now,
       });
-    }
+    });
     for (const e of events) {
       for (const h of this.handlers) {
         try {
@@ -156,4 +176,13 @@ export class PaymentWatcher {
 /** A status that will not change again without outside action. */
 export function isFinal(status: PaymentStatus): boolean {
   return status === 'paid' || status === 'overpaid' || status === 'expired' || status === 'refund_required' || status === 'manual_review';
+}
+
+/** Runs `fn` over `items` with at most `limit` in flight. Never rejects on its own: `fn` is expected to handle its errors. */
+async function forEachLimited<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++]!);
+  });
+  await Promise.all(workers);
 }

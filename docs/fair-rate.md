@@ -28,7 +28,9 @@ Each payment request stores `rateSnapshotHash`, so any charge can be traced to t
 
 1. Ask every `RateProvider` (cached for `quoteTtlMs`, default 30 s). Failures and stale quotes (`maxQuoteAgeMs`) are recorded, not fatal.
 2. Take the median, drop quotes more than `maxDeviationBps` (default 300 = 3%) from it, and take the median again.
-3. Require at least `minSources` survivors.
+3. Require at least `minSources` survivors. If too few remain, the error lists every source's quote, so you can see why.
+
+   **Two sources that disagree are both dropped**, because the median of two is their midpoint and each is equally far from it. Real example: CoinGecko 1,326 vs Binance 1,518 NGN per USDT (~14% apart) fails the default 3% check, and the server refuses to price rather than pick a side. Use one trusted source, add a third, or widen `maxDeviationBps` knowingly (`PAYCRYT_MAX_RATE_DEVIATION_BPS` on the server); see [live-server.md](live-server.md).
 4. Apply your `spreadBps` **against the customer**: below mid when they pay crypto for a fiat bill (`CRYPTO_TO_FIAT`), above mid when they buy crypto (`FIAT_TO_CRYPTO`).
 
 Add a parallel-market source (`ParallelMarketRateProvider`) beside official exchanges, and the median naturally reflects what customers experience while the outlier filter guards against a bad feed.

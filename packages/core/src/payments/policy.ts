@@ -37,6 +37,15 @@ export interface PaymentPolicy {
    * caught (as `refund_required`/`manual_review`, per `latePayment`) instead of vanishing silently.
    */
   lateWatchMs: number;
+
+  /**
+   * Deposits stamped more than this long before the payment request was created are treated as funds that
+   * were already at the address, not as this customer's payment. Without this, a wallet with history
+   * (an imported xpub, a reused address) makes a brand-new payment look paid instantly from old money.
+   * Block timestamps drift from the wall clock by minutes (Bitcoin allows hours), so this is generous by
+   * default; a request's `baselineTxIds` closes the remaining gap exactly for payments created online.
+   */
+  backdateToleranceMs: number;
 }
 
 export const DEFAULT_POLICY: PaymentPolicy = {
@@ -47,6 +56,7 @@ export const DEFAULT_POLICY: PaymentPolicy = {
   overpayment: { toleranceBps: 50, action: 'credit' },
   latePayment: 'refund',
   lateWatchMs: 24 * 60 * 60_000,
+  backdateToleranceMs: 3 * 60 * 60_000,
 };
 
 export function withPolicy(overrides: DeepPartial<PaymentPolicy> = {}): PaymentPolicy {
@@ -91,13 +101,14 @@ export function validatePolicyOverrides(input: unknown): DeepPartial<PaymentPoli
   if (input === undefined || input === null) return {};
   if (typeof input !== 'object' || Array.isArray(input)) throw new Error('policy must be an object');
   const p = input as Record<string, unknown>;
-  onlyKeys(p, '', ['minConfirmations', 'expiryMs', 'graceMs', 'underpayment', 'overpayment', 'latePayment', 'lateWatchMs']);
+  onlyKeys(p, '', ['minConfirmations', 'expiryMs', 'graceMs', 'underpayment', 'overpayment', 'latePayment', 'lateWatchMs', 'backdateToleranceMs']);
 
   const out: DeepPartial<PaymentPolicy> = {};
   if (p.minConfirmations !== undefined) out.minConfirmations = intInRange(p.minConfirmations, 'minConfirmations', 0, 1_000);
   if (p.expiryMs !== undefined) out.expiryMs = intInRange(p.expiryMs, 'expiryMs', 1_000, 30 * DAY);
   if (p.graceMs !== undefined) out.graceMs = intInRange(p.graceMs, 'graceMs', 0, 7 * DAY);
   if (p.lateWatchMs !== undefined) out.lateWatchMs = intInRange(p.lateWatchMs, 'lateWatchMs', 0, 30 * DAY);
+  if (p.backdateToleranceMs !== undefined) out.backdateToleranceMs = intInRange(p.backdateToleranceMs, 'backdateToleranceMs', 0, 7 * DAY);
   if (p.latePayment !== undefined) out.latePayment = oneOf(p.latePayment, 'latePayment', ['refund', 'manual_review'] as const);
 
   if (p.underpayment !== undefined) {
@@ -180,7 +191,11 @@ export function evaluatePayment(
   let received = 0n;
   let pending = 0n;
   let late = 0n;
+  const baseline = request.baselineTxIds ? new Set(request.baselineTxIds) : undefined;
   for (const d of mine) {
+    // Funds that were already at this address before the request existed are not this customer's payment.
+    if (baseline?.has(d.txId)) continue;
+    if (d.receivedAt < request.createdAt - policy.backdateToleranceMs) continue;
     if (d.receivedAt > cutoff) late += d.amount;
     else if (d.confirmations >= policy.minConfirmations) received += d.amount;
     else pending += d.amount;

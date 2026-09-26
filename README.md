@@ -6,7 +6,7 @@ Most crypto payment tools assume always-on internet, US/EU banks and one clean e
 
 You bring the accounts and keys. Paycryt never holds funds, and there is nothing to host on our side.
 
-> **Status: alpha (0.1).** The core logic is tested and the sandbox is complete. All three targeted chains now have a real, live-verified address deriver and chain adapter: [Tron/TRC20](docs/tron.md), [EVM](docs/evm.md) and [Bitcoin](docs/bitcoin.md) — the EVM and Bitcoin ones were each checked, unmocked, against their real mainnets (173 real USDT deposits found on Ethereum; 29 real BTC deposits found and independently cross-checked). None has been run through a full create-payment-and-get-paid flow end to end, and the Paystack/Flutterwave fiat adapters are experimental. Do not point it at real money without your own review.
+> **Status: alpha (0.1).** The core logic is tested and the sandbox is complete. All three targeted chains now have a real, live-verified address deriver and chain adapter: [Tron/TRC20](docs/tron.md), [EVM](docs/evm.md) and [Bitcoin](docs/bitcoin.md) — the EVM and Bitcoin ones were each checked, unmocked, against their real mainnets (173 real USDT deposits found on Ethereum; 29 real BTC deposits found and independently cross-checked). The server can now run **live** on those chains with real exchange rates ([docs](docs/live-server.md)) and has been driven end to end against real CoinGecko, Binance, Blockstream and an Ethereum RPC, but no real money has moved through the full flow yet, and the Paystack/Flutterwave fiat adapters are experimental. Do not point it at real money without your own review.
 
 ## What makes it different
 
@@ -20,6 +20,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 | **Tron (TRC20 USDT)** | A real, non-custodial address deriver and a real chain watcher against the live TronGrid API, with real block-depth confirmations checked against the live chain — the rail most Nigerian/Ghanaian USDT payments actually use. Experimental. → [docs](docs/tron.md) |
 | **EVM chains (Ethereum, Base, BNB Chain)** | A real chain watcher over JSON-RPC — `eth_getLogs` for ERC-20 transfers, real block-based confirmations, no indexer needed. Checked live against Ethereum mainnet: found 173 real USDT deposits with no mocking. Experimental. → [docs](docs/evm.md) |
 | **Bitcoin (native SegWit)** | A real, non-custodial BIP84 address deriver and a chain watcher over the Esplora REST API (blockstream.info, mempool.space, or self-hosted). Checked live against Bitcoin mainnet: 29 real deposits parsed, matched exactly against an independent recomputation. Experimental. → [docs](docs/bitcoin.md) |
+| **Live server** | `PAYCRYT_SANDBOX=false` runs the server on real Tron/EVM/Bitcoin watchers and real CoinGecko/Binance rates. It refuses fake chains and made-up prices, requires a database, skips already-used addresses, and answers 503 instead of guessing when a rate or address check fails. Never credits a new payment with old funds. → [docs](docs/live-server.md) |
 | **Multi-tenant API keys** | One server, many businesses: an admin key onboards merchants, each with their own key (stored only as a hash), spread, policy defaults, webhook secret and **own wallet keys, so customers pay the merchant directly**. A merchant sees only their own payments, events, payouts and devices; someone else's payment id answers exactly like a missing one. Isolation is mutation-tested and survives a real restart. Offline sync now also refuses a device that forges its own asset, policy, expiry or payment id. → [docs](docs/multi-tenant.md) |
 | **Persistence** | `SqliteStore` (`node:sqlite`, no native dependency) for `OfflinePOS` and the reference server — payments, the rate audit trail and address leases all survive a restart. Verified with a real process restart: a fresh `node` process reloaded and paid a payment created by a different, already-killed process. `IndexedDbStore` covers the browser/WebView side of `OfflinePOS`, verified with a real page navigation. → [docs](docs/persistence.md) |
 
@@ -28,7 +29,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 ```bash
 npm install
 npm run build
-npm test                # 219 tests
+npm test                # 261 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```
@@ -97,7 +98,7 @@ const { request, uri } = await pos.createPayment({                // works with 
 |---|---|
 | [`@paycryt/core`](packages/core) | The library: amounts, HD address derivation, rate engine + audit log, payment policy, watcher, fake chain, offline POS + sync receiver, webhooks, settlement interfaces. Runs in Node and browsers. |
 | [`@paycryt/adapters`](packages/adapters) | Optional: CoinGecko, Binance and parallel-market rate sources; live Tron/TRC20, EVM and Bitcoin chain adapters; `SqliteStore` and `IndexedDbStore` `KVStore`s; Paystack and Flutterwave (all experimental). |
-| [`@paycryt/server`](packages/server) | Optional reference API with the built-in sandbox. Runs in-memory by default; pass a `store` to `PaycrytServer.create()` and it survives restarts. Still a starting point, not a production service. |
+| [`@paycryt/server`](packages/server) | Optional reference API. Sandbox mode (default) uses a fake chain; live mode (`PAYCRYT_SANDBOX=false`, see [docs/live-server.md](docs/live-server.md)) watches real Tron/EVM/Bitcoin chains with real rates. Runs in-memory by default in the sandbox; pass a `store` to `PaycrytServer.create()` and it survives restarts. Still a starting point, not a production service. |
 | [`examples/offline-pos`](examples/offline-pos) | Runnable end-to-end demo. |
 
 Use only what you need. Install the library from npm, or fork the repo and self-host the server.
