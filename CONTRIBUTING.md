@@ -10,7 +10,7 @@ npm run build
 npm test
 ```
 
-Node 20+ (developed on 24). Tests run against TypeScript sources via Vitest; `npm run build` produces `dist/` for the packages.
+Node 22.5+ (developed on 24). The SQLite store uses the built-in `node:sqlite`, which older Node versions lack, so the test suite needs 22.5 or newer. Tests run against TypeScript sources via Vitest; `npm run build` produces `dist/` for the packages.
 
 ## Ground rules
 
