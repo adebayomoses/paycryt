@@ -21,6 +21,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 | **EVM chains (Ethereum, Base, BNB Chain)** | A real chain watcher over JSON-RPC — `eth_getLogs` for ERC-20 transfers, real block-based confirmations, no indexer needed. Checked live against Ethereum mainnet: found 173 real USDT deposits with no mocking. Experimental. → [docs](docs/evm.md) |
 | **Bitcoin (native SegWit)** | A real, non-custodial BIP84 address deriver and a chain watcher over the Esplora REST API (blockstream.info, mempool.space, or self-hosted). Checked live against Bitcoin mainnet: 29 real deposits parsed, matched exactly against an independent recomputation. Experimental. → [docs](docs/bitcoin.md) |
 | **Live server** | `PAYCRYT_SANDBOX=false` runs the server on real Tron/EVM/Bitcoin watchers and real CoinGecko/Binance rates. It refuses fake chains and made-up prices, requires a database, skips already-used addresses, and answers 503 instead of guessing when a rate or address check fails. Never credits a new payment with old funds. → [docs](docs/live-server.md) |
+| **Rate limiting & audit log** | Every authenticated caller has its own request budget (429 + Retry-After when exceeded), a separate limiter slows down API-key guessing without throttling legitimate callers, and `GET /v1/admin/audit` records merchant lifecycle changes newest-first, never a secret. Off by default if you embed the server, on by default from the CLI. → [docs](docs/live-server.md#rate-limiting-and-the-audit-log) |
 | **Multi-tenant API keys** | One server, many businesses: an admin key onboards merchants, each with their own key (stored only as a hash), spread, policy defaults, webhook secret and **own wallet keys, so customers pay the merchant directly**. A merchant sees only their own payments, events, payouts and devices; someone else's payment id answers exactly like a missing one. Isolation is mutation-tested and survives a real restart. Offline sync now also refuses a device that forges its own asset, policy, expiry or payment id. → [docs](docs/multi-tenant.md) |
 | **Persistence** | `SqliteStore` (`node:sqlite`, no native dependency) for `OfflinePOS` and the reference server — payments, the rate audit trail and address leases all survive a restart. Verified with a real process restart: a fresh `node` process reloaded and paid a payment created by a different, already-killed process. `IndexedDbStore` covers the browser/WebView side of `OfflinePOS`, verified with a real page navigation. → [docs](docs/persistence.md) |
 
@@ -29,7 +30,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 ```bash
 npm install
 npm run build
-npm test                # 261 tests
+npm test                # 281 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```

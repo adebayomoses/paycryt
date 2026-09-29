@@ -41,6 +41,8 @@ import {
   walletFamilyForChain,
   withPolicy,
 } from '@paycryt/core';
+import { AuditLogStore } from './audit.js';
+import { RateLimiter } from './rate-limit.js';
 
 export interface ServerConfig {
   /** Bearer token clients must send. */
@@ -78,6 +80,14 @@ export interface ServerConfig {
    * on purpose (see docs/persistence.md) — only payments/rates/leases are.
    */
   store?: KVStore;
+  /** Requests allowed per minute for each authenticated caller (the admin key counts separately from each merchant). Undefined (default) disables this limiter. */
+  requestsPerMinute?: number;
+  /** Short burst allowed above `requestsPerMinute`. Default: equal to `requestsPerMinute`. */
+  requestBurst?: number;
+  /** Failed-authentication attempts allowed per minute per source IP, to slow down API-key guessing. Undefined (default) disables this limiter. */
+  authFailuresPerMinute?: number;
+  /** Trust the first hop of `X-Forwarded-For` as the caller's real IP. Only enable this behind a proxy you control — otherwise a caller can forge the header to dodge the auth-failure limiter. Default false. */
+  trustProxy?: boolean;
 }
 
 const ASSET_LIST = ASSETS as Record<string, Asset>;
@@ -120,6 +130,9 @@ export class PaycrytServer {
   private readonly walletCounters = new Map<string, number>();
   private readonly kv: KVStore;
   private readonly merchants: MerchantStore;
+  private readonly audit: AuditLogStore;
+  private readonly requestLimiter?: RateLimiter;
+  private readonly authFailureLimiter?: RateLimiter;
   private readonly receiver: SyncReceiver;
   private readonly deriver = new FakeChain('sandbox');
   private readonly payments?: PaymentRequestStore;
@@ -177,6 +190,9 @@ export class PaycrytServer {
     // Merchants and device ownership live in the configured store, or in memory when there is none.
     this.kv = config.store ?? new MemoryStore();
     this.merchants = new MerchantStore(this.kv);
+    this.audit = new AuditLogStore(this.kv);
+    this.requestLimiter = config.requestsPerMinute ? new RateLimiter(config.requestsPerMinute, config.requestBurst ?? config.requestsPerMinute, now) : undefined;
+    this.authFailureLimiter = config.authFailuresPerMinute ? new RateLimiter(config.authFailuresPerMinute, config.authFailuresPerMinute, now) : undefined;
 
     if (config.store) {
       this.payments = new PaymentRequestStore(config.store);
@@ -255,6 +271,9 @@ export class PaycrytServer {
     try {
       await this.watcher.tick();
       this.lastTick = { at: this.now(), ms: Date.now() - started };
+      // Bounds how many rate-limit buckets a long-running server accumulates (one per distinct caller/IP seen).
+      this.requestLimiter?.sweep(10 * 60_000);
+      this.authFailureLimiter?.sweep(10 * 60_000);
     } catch (err) {
       console.warn(`[paycryt] poll failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -286,6 +305,16 @@ export class PaycrytServer {
     if (auth.role !== 'admin') throw new HttpError(403, 'This endpoint needs the admin API key');
   }
 
+  /** The caller's address, trusting `X-Forwarded-For`'s first hop only when `trustProxy` is on. */
+  private clientIp(req: IncomingMessage): string {
+    if (this.config.trustProxy) {
+      const fwd = req.headers['x-forwarded-for'];
+      const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim();
+      if (first) return first;
+    }
+    return req.socket.remoteAddress ?? 'unknown';
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -294,7 +323,20 @@ export class PaycrytServer {
 
       if (method === 'GET' && path === '/health') return send(res, 200, { ok: true, sandbox: !!this.config.sandbox, mode: this.config.sandbox ? 'sandbox' : 'live' });
 
-      const auth = await this.authenticate(req);
+      let auth: Auth;
+      try {
+        auth = await this.authenticate(req);
+      } catch (err) {
+        // Only failed attempts count against this limiter, so a legitimate caller is never throttled by it.
+        const limited = this.authFailureLimiter?.take(this.clientIp(req));
+        if (limited && !limited.ok) return sendRateLimited(res, limited.retryAfterMs);
+        throw err;
+      }
+      if (this.requestLimiter) {
+        const key = auth.role === 'admin' ? 'admin' : `merchant:${auth.merchant.id}`;
+        const limited = this.requestLimiter.take(key);
+        if (!limited.ok) return sendRateLimited(res, limited.retryAfterMs);
+      }
 
       const body = method === 'POST' ? await readBody(req) : '';
       const json = body ? (JSON.parse(body) as any) : {};
@@ -302,6 +344,12 @@ export class PaycrytServer {
       if (method === 'GET' && path === '/v1/status') {
         this.requireAdmin(auth);
         return send(res, 200, this.status());
+      }
+
+      if (method === 'GET' && path === '/v1/admin/audit') {
+        this.requireAdmin(auth);
+        const limit = Math.min(500, Math.max(1, Math.trunc(Number(url.searchParams.get('limit') ?? 100)) || 100));
+        return send(res, 200, await this.audit.recent(limit));
       }
 
       if (method === 'GET' && path === '/v1/me') {
@@ -398,6 +446,7 @@ export class PaycrytServer {
       if (method === 'POST') {
         const input = validateMerchantInput(json);
         const { merchant, apiKey } = await this.merchants.create({ ...input, now: this.now() });
+        await this.audit.append({ at: this.now(), action: 'merchant.create', merchantId: merchant.id, detail: { name: merchant.name } });
         // The API key and a generated webhook secret are returned exactly once, here.
         return send(res, 201, { merchant: toMerchantView(merchant), apiKey, webhookSecret: merchant.webhookSecret });
       }
@@ -415,17 +464,22 @@ export class PaycrytServer {
     if (action === '/rotate-key' && method === 'POST') {
       const rotated = await this.merchants.rotateKey(id);
       if (!rotated) throw new HttpError(404, 'Unknown merchant');
+      await this.audit.append({ at: this.now(), action: 'merchant.rotate-key', merchantId: id });
       return send(res, 200, { merchant: toMerchantView(rotated.merchant), apiKey: rotated.apiKey });
     }
     if (action === '/wallets' && method === 'POST') {
       if (typeof json !== 'object' || json === null || Array.isArray(json)) throw new HttpError(400, 'Body must be an object like { "evm": "xpub...", "tron": null }');
       const merchant = await this.merchants.setWallets(id, json);
       if (!merchant) throw new HttpError(404, 'Unknown merchant');
+      // Which chain families changed, and to what (set/removed) — never the key value itself. See AuditEntry.
+      const changed = Object.fromEntries(Object.entries(json as Record<string, unknown>).map(([family, v]) => [family, v === null ? 'removed' : 'set']));
+      await this.audit.append({ at: this.now(), action: 'merchant.wallets', merchantId: id, detail: { changed } });
       return send(res, 200, toMerchantView(merchant));
     }
     if ((action === '/disable' || action === '/enable') && method === 'POST') {
       const merchant = await this.merchants.setDisabled(id, action === '/disable');
       if (!merchant) throw new HttpError(404, 'Unknown merchant');
+      await this.audit.append({ at: this.now(), action: action === '/disable' ? 'merchant.disable' : 'merchant.enable', merchantId: id });
       return send(res, 200, toMerchantView(merchant));
     }
     throw new HttpError(405, 'Method not allowed');
@@ -535,7 +589,8 @@ export class PaycrytServer {
     }
 
     const snapshot = await this.getSnapshot({ base: asset.symbol, quote: currency.code, direction: 'CRYPTO_TO_FIAT', spreadBps: merchant?.spreadBps });
-    const { index, address } = await this.issueAddress(chain, asset, walletDeriver, merchant, family);    const request = createPaymentRequest({
+    const { index, address } = await this.issueAddress(chain, asset, walletDeriver, merchant, family);
+    const request = createPaymentRequest({
       fiat: { currency: currency.code, amountMinor: parseUnits(String(input.amount), currency.decimals) },
       asset,
       address,
@@ -750,6 +805,12 @@ function send(res: ServerResponse, status: number, data: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
   // bigint -> string for plain-JSON clients
   res.end(JSON.stringify(data, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
+}
+
+function sendRateLimited(res: ServerResponse, retryAfterMs: number): void {
+  const retryAfterSec = Math.ceil(retryAfterMs / 1000);
+  res.writeHead(429, { 'content-type': 'application/json', 'retry-after': String(retryAfterSec) });
+  res.end(JSON.stringify({ error: `Rate limit exceeded. Retry after ${retryAfterSec}s.` }));
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

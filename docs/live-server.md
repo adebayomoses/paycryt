@@ -34,6 +34,9 @@ node packages/server/dist/cli.js
 | `PAYCRYT_MIN_RATE_SOURCES` | How many sources must agree. Default 1. |
 | `PAYCRYT_MAX_RATE_DEVIATION_BPS` | How far a source may sit from the median. Default 300 (3%). Range 1 to 5000. |
 | `PAYCRYT_POLL_MS`, `PAYCRYT_POLL_CONCURRENCY` | How often payments are checked (default 5000) and how many at once (default 4). |
+| `PAYCRYT_RATE_LIMIT_PER_MINUTE`, `PAYCRYT_RATE_LIMIT_BURST` | Requests allowed per minute for each authenticated key (default 120, burst = that value). `0` disables it. |
+| `PAYCRYT_AUTH_FAILURES_PER_MINUTE` | Failed-auth attempts allowed per minute per source IP (default 20). `0` disables it. |
+| `PAYCRYT_TRUST_PROXY` | `true` trusts the first `X-Forwarded-For` hop as the caller's IP. Only turn this on behind a proxy you control. |
 
 Every setting is validated at startup, and the error names the variable to fix. RPC URLs often carry an API key in the path, so the startup summary prints only their host.
 
@@ -70,6 +73,14 @@ You have three honest options: use one source you trust, add a third so an outli
 
 **Free public RPCs are unreliable, so use a paid tier or your own node.** Against `ethereum-rpc.publicnode.com`, three end-to-end attempts gave one success and two `eth_getLogs` HTTP 403 responses ("Archive requests require a personal token"), even though the adapter only asks for the last 1,200 blocks and the same call succeeds when repeated by hand. Live mode handled it correctly (503, no address issued, nothing half-created), but a shared free node will make payment creation flaky. Providers such as Alchemy, Infura and Ankr, or a node you run, avoid this.
 
+## Rate limiting and the audit log
+
+Every authenticated caller — the admin key, and each merchant separately — has its own request budget (`PAYCRYT_RATE_LIMIT_PER_MINUTE`, default 120/min, burst equal to that). A caller over budget gets `429` with a `Retry-After` header and a JSON error; `/health` is never limited. A second, separate limiter (`PAYCRYT_AUTH_FAILURES_PER_MINUTE`, default 20/min per source IP) only counts *failed* authentication attempts, so it slows down someone guessing API keys without ever throttling a legitimate caller's occasional typo. Both are in-memory token buckets: they reset on restart, and old buckets are swept out periodically so a long-running server doesn't accumulate one per caller forever.
+
+These are `ServerConfig` fields (`requestsPerMinute`, `requestBurst`, `authFailuresPerMinute`, `trustProxy`) and default to **off** if you embed `PaycrytServer` yourself; the CLI turns on the defaults above because a server reachable over the network should have some protection without extra setup. Set either limit's env var to `0` to disable it.
+
+`GET /v1/admin/audit` (admin key, optional `?limit=`, default 100, max 500) returns merchant lifecycle changes — create, rotate-key, wallet changes, disable/enable — newest first. Entries never carry a secret: a wallet change records which chain family was set or removed, not the key value, and nothing records an API key. Persisted alongside merchants and payments when you configure `PAYCRYT_DB_PATH`.
+
 ## Onboarding a merchant
 
 ```bash
@@ -82,4 +93,4 @@ The response contains the merchant's API key once. Only its hash is stored. Wall
 
 ## Not covered yet
 
-Rate limiting, an admin audit log, and live checks of the Paystack/Flutterwave adapters. See the [roadmap](../ROADMAP.md).
+A real payment through the full create-and-pay flow on a testnet or with small mainnet amounts, and live checks of the Paystack/Flutterwave adapters. See the [roadmap](../ROADMAP.md).

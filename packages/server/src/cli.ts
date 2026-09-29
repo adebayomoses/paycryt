@@ -16,10 +16,24 @@ const dbPath = process.env.PAYCRYT_DB_PATH;
 const pollIntervalMs = process.env.PAYCRYT_POLL_MS ? Number(process.env.PAYCRYT_POLL_MS) : undefined;
 const pollConcurrency = process.env.PAYCRYT_POLL_CONCURRENCY ? Number(process.env.PAYCRYT_POLL_CONCURRENCY) : undefined;
 
+// Defaults are on, unlike ServerConfig's own (off) default: a server started from this CLI is reachable over
+// the network, so rate limiting shouldn't need an operator to remember to turn it on. Set either to 0 to disable.
+const requestsPerMinute = process.env.PAYCRYT_RATE_LIMIT_PER_MINUTE ? Number(process.env.PAYCRYT_RATE_LIMIT_PER_MINUTE) : 120;
+const requestBurst = process.env.PAYCRYT_RATE_LIMIT_BURST ? Number(process.env.PAYCRYT_RATE_LIMIT_BURST) : undefined;
+const authFailuresPerMinute = process.env.PAYCRYT_AUTH_FAILURES_PER_MINUTE ? Number(process.env.PAYCRYT_AUTH_FAILURES_PER_MINUTE) : 20;
+const trustProxy = process.env.PAYCRYT_TRUST_PROXY === 'true';
+
 if (!sandbox && apiKey === 'sandbox_key') fail('refusing to start outside sandbox mode with the default API key. Set PAYCRYT_API_KEY.');
 if (!sandbox && apiKey.length < 24) fail('PAYCRYT_API_KEY is short for an admin key that can onboard merchants; use at least 24 random characters.');
 for (const [name, v] of [['PAYCRYT_POLL_MS', pollIntervalMs], ['PAYCRYT_POLL_CONCURRENCY', pollConcurrency]] as const) {
   if (v !== undefined && (!Number.isInteger(v) || v < 1)) fail(`${name} must be a positive integer`);
+}
+for (const [name, v] of [
+  ['PAYCRYT_RATE_LIMIT_PER_MINUTE', requestsPerMinute],
+  ['PAYCRYT_RATE_LIMIT_BURST', requestBurst],
+  ['PAYCRYT_AUTH_FAILURES_PER_MINUTE', authFailuresPerMinute],
+] as const) {
+  if (v !== undefined && (!Number.isInteger(v) || v < 0)) fail(`${name} must be a non-negative integer (0 disables it)`);
 }
 if (!sandbox && !dbPath && process.env.PAYCRYT_ALLOW_EPHEMERAL !== 'true') {
   fail(
@@ -50,6 +64,10 @@ const server = await PaycrytServer.create({
   maxRateDeviationBps: live?.maxRateDeviationBps,
   pollIntervalMs,
   pollConcurrency,
+  requestsPerMinute: requestsPerMinute || undefined,
+  requestBurst,
+  authFailuresPerMinute: authFailuresPerMinute || undefined,
+  trustProxy,
 });
 
 const host = process.env.HOST ?? '127.0.0.1';
@@ -57,6 +75,9 @@ const actual = await server.listen(port, host);
 console.log(`Paycryt ${sandbox ? 'SANDBOX' : 'LIVE'} server listening on http://${host}:${actual}`);
 console.log(`  API key:  ${sandbox ? apiKey : '(from PAYCRYT_API_KEY)'}`);
 console.log(`  Storage:  ${dbPath ? `SQLite at ${dbPath} (survives restarts)` : 'in-memory (set PAYCRYT_DB_PATH to persist)'}`);
+console.log(
+  `  Rate limits: ${requestsPerMinute || 'off'}${requestsPerMinute ? `/min per key (burst ${requestBurst ?? requestsPerMinute})` : ''}, ${authFailuresPerMinute || 'off'}${authFailuresPerMinute ? '/min failed auth per IP' : ''}${trustProxy ? ' (trusting X-Forwarded-For)' : ''}`,
+);
 if (sandbox) {
   console.log('  Fake chain, simulated deposits, and mock settlement are enabled. No real money moves.');
   console.log(`\n  Try:  curl -H "Authorization: Bearer ${apiKey}" http://${host}:${actual}/v1/rates/USDT-NGN`);
