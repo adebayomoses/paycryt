@@ -26,6 +26,72 @@ describe('webhooks', () => {
     expect(verifyWebhook('s3cret', body, sig, { nowSec: 1_700_000_000 + 3600 })).toBe(false);
   });
 
+  it('accepts any of several secrets, so a receiver can rotate without downtime', () => {
+    const sig = signWebhook('new-secret', body, 1_700_000_000);
+    const now = { nowSec: 1_700_000_010 };
+    expect(verifyWebhook(['old-secret', 'new-secret'], body, sig, now)).toBe(true);
+    expect(verifyWebhook(['old-secret', 'other'], body, sig, now)).toBe(false);
+    expect(verifyWebhook([], body, sig, now)).toBe(false);
+    expect(verifyWebhook([''], body, sig, now)).toBe(false);
+  });
+
+  it('accepts a header carrying several v1 signatures if any one matches', () => {
+    const old = signWebhook('old-secret', body, 1_700_000_000).split(',')[1]!;
+    const fresh = signWebhook('new-secret', body, 1_700_000_000);
+    const both = `${fresh},${old}`;
+    const now = { nowSec: 1_700_000_010 };
+    expect(verifyWebhook('new-secret', body, both, now)).toBe(true);
+    expect(verifyWebhook('old-secret', body, both, now)).toBe(true);
+    expect(verifyWebhook('neither', body, both, now)).toBe(false);
+  });
+
+  it('returns false, never throws, on malformed headers', () => {
+    const now = { nowSec: 1_700_000_010 };
+    for (const h of ['', 'garbage', 't=,v1=', 't=abc,v1=00', 't=1700000000', 'v1=00', 't=-5,v1=00', 't=1e9,v1=00', 't=1700000000,v1=', ',,,', '=,=']) {
+      expect(verifyWebhook('s3cret', body, h, now), h).toBe(false);
+    }
+    expect(verifyWebhook('s3cret', body, undefined as unknown as string, now)).toBe(false);
+  });
+
+  it('tolerates spaces after commas in the header', () => {
+    const [t, v1] = signWebhook('s3cret', body, 1_700_000_000).split(',');
+    expect(verifyWebhook('s3cret', body, `${t}, ${v1}`, { nowSec: 1_700_000_010 })).toBe(true);
+  });
+
+  it('sends with a timeout signal and does not follow redirects', async () => {
+    let seen: { redirect?: string; signal?: AbortSignal } = {};
+    const fetch: FetchLike = async (_url, init) => {
+      seen = { redirect: init!.redirect, signal: init!.signal };
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    };
+    const d = new WebhookDispatcher({ url: 'https://merchant.test/hook', secret: 'k', fetch });
+    expect(await d.send({ id: 'evt_t' })).toBe(true);
+    expect(seen.redirect).toBe('manual');
+    expect(seen.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('counts a hung endpoint as a failed attempt and retries instead of stalling', async () => {
+    let calls = 0;
+    const fetch: FetchLike = (_url, init) => {
+      calls++;
+      if (calls === 1) {
+        return new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new Error('timed out'))));
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}), text: async () => '' });
+    };
+    const d = new WebhookDispatcher({ url: 'https://merchant.test/hook', secret: 'k', fetch, timeoutMs: 20, backoffMs: [1], sleep: async () => {} });
+    expect(await d.send({ id: 'evt_hang' })).toBe(true);
+    expect(calls).toBe(2);
+    expect(d.log[0]).toMatchObject({ ok: false, error: 'timed out' });
+  });
+
+  it('counts a 3xx as a failed attempt', async () => {
+    const fetch: FetchLike = async () => ({ ok: false, status: 302, json: async () => ({}), text: async () => '' });
+    const d = new WebhookDispatcher({ url: 'https://merchant.test/hook', secret: 'k', fetch, backoffMs: [1], sleep: async () => {} });
+    expect(await d.send({ id: 'evt_redir' })).toBe(false);
+    expect(d.log.every((a) => a.status === 302 && !a.ok)).toBe(true);
+  });
+
   it('retries with backoff, then succeeds, and can be replayed', async () => {
     let calls = 0;
     const seenSignatures: string[] = [];

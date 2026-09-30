@@ -4,6 +4,7 @@ export * from './serialize.js';
 export * from './persistence.js';
 export * from './merchants.js';
 export * from './webhooks.js';
+export * from './netguard.js';
 
 export * from './rates/snapshot.js';
 export * from './rates/engine.js';

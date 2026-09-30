@@ -6,20 +6,42 @@ export function signWebhook(secret: string, body: string, timestampSec = Math.fl
   return `t=${timestampSec},v1=${hmacSha256Hex(secret, `${timestampSec}.${body}`)}`;
 }
 
-/** Verify a signature header. Rejects tampered bodies and, by default, deliveries older than 5 minutes (replay protection). */
+/**
+ * Verify a signature header. Rejects tampered bodies and, by default, deliveries older than 5 minutes (replay protection).
+ *
+ * `secret` may be an array so a receiver can rotate secrets without downtime: accept both the old and the new one
+ * while senders switch over. The header may also carry several `v1=` values (one per active secret on the sender
+ * side); any one matching is enough. Malformed headers return `false`, never throw.
+ */
 export function verifyWebhook(
-  secret: string,
+  secret: string | string[],
   body: string,
   header: string,
   opts: { toleranceSec?: number; nowSec?: number } = {},
 ): boolean {
-  const parts = Object.fromEntries(header.split(',').map((p) => p.split('=') as [string, string]));
-  const t = Number(parts.t);
-  const v1 = parts.v1;
-  if (!Number.isFinite(t) || !v1) return false;
+  if (typeof header !== 'string') return false;
+  let t: string | undefined;
+  const signatures: string[] = [];
+  for (const part of header.split(',')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const key = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (key === 't' && t === undefined) t = value;
+    else if (key === 'v1' && value) signatures.push(value);
+  }
+  if (t === undefined || !/^\d{1,15}$/.test(t) || signatures.length === 0) return false;
+  const ts = Number(t);
   const now = opts.nowSec ?? Math.floor(Date.now() / 1000);
-  if (Math.abs(now - t) > (opts.toleranceSec ?? 300)) return false;
-  return safeEqual(hmacSha256Hex(secret, `${t}.${body}`), v1);
+  if (Math.abs(now - ts) > (opts.toleranceSec ?? 300)) return false;
+  const secrets = (Array.isArray(secret) ? secret : [secret]).filter((x) => x.length > 0);
+  // Compare against every candidate without short-circuiting, so timing doesn't reveal which one matched.
+  let matched = false;
+  for (const sec of secrets) {
+    const expected = hmacSha256Hex(sec, `${t}.${body}`);
+    for (const sig of signatures) if (safeEqual(expected, sig)) matched = true;
+  }
+  return matched;
 }
 
 export interface DeliveryAttempt {
@@ -39,6 +61,8 @@ export interface WebhookDispatcherOptions {
   backoffMs?: number[];
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** Abort a delivery attempt that takes longer than this. Default 10s, so one hung endpoint can't stall retries forever. */
+  timeoutMs?: number;
 }
 
 /** Delivers signed events with retries. Keeps a delivery log you can show in a UI or replay from. */
@@ -65,6 +89,7 @@ export class WebhookDispatcher {
     const backoff = this.o.backoffMs ?? [1_000, 5_000, 30_000, 300_000, 1_800_000];
     const sleep = this.o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const now = this.o.now ?? Date.now;
+    const timeoutMs = this.o.timeoutMs ?? 10_000;
     for (let attempt = 1; attempt <= backoff.length + 1; attempt++) {
       try {
         const res = await this.o.fetch(this.o.url, {
@@ -75,6 +100,10 @@ export class WebhookDispatcher {
             'paycryt-event-id': eventId,
           },
           body,
+          // Never follow redirects: a 3xx from a merchant endpoint could otherwise bounce the signed request to an
+          // internal address. A redirect counts as a failed attempt and is retried like any other non-2xx.
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
         });
         this.log.push({ eventId, attempt, ok: res.ok, status: res.status, at: now() });
         if (res.ok) return true;

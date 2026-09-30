@@ -35,6 +35,7 @@ import {
   fromJson,
   mergePolicyOverrides,
   parseUnits,
+  assertPublicHttpUrl,
   safeEqual,
   toMerchantView,
   validatePolicyOverrides,
@@ -50,6 +51,12 @@ export interface ServerConfig {
   /** Where to POST signed payment events. Optional. */
   webhookUrl?: string;
   webhookSecret?: string;
+  /**
+   * Refuse merchant `webhookUrl`s that point at localhost, private/internal names or private IP literals (a basic
+   * SSRF guard). Off by default so local sandbox receivers keep working; the CLI turns it on in live mode. It checks
+   * the host as written and does not resolve DNS; see docs/multi-tenant.md.
+   */
+  blockPrivateWebhookUrls?: boolean;
   /** Your margin in bps, applied against customers. */
   spreadBps?: number;
   /** Enables /v1/sandbox/* (fake deposits, mining, time travel, rate changes). Never enable in production. */
@@ -444,7 +451,7 @@ export class PaycrytServer {
     if (path === '/v1/admin/merchants') {
       if (method === 'GET') return send(res, 200, (await this.merchants.list()).map(toMerchantView));
       if (method === 'POST') {
-        const input = validateMerchantInput(json);
+        const input = validateMerchantInput(json, { blockPrivateWebhookUrls: this.config.blockPrivateWebhookUrls });
         const { merchant, apiKey } = await this.merchants.create({ ...input, now: this.now() });
         await this.audit.append({ at: this.now(), action: 'merchant.create', merchantId: merchant.id, detail: { name: merchant.name } });
         // The API key and a generated webhook secret are returned exactly once, here.
@@ -746,7 +753,7 @@ function validateMetadata(v: unknown): Record<string, string> | undefined {
   return Object.fromEntries(entries) as Record<string, string>;
 }
 
-function validateMerchantInput(v: any) {
+function validateMerchantInput(v: any, opts: { blockPrivateWebhookUrls?: boolean } = {}) {
   if (typeof v !== 'object' || v === null) throw new HttpError(400, 'Body must be a JSON object');
   const allowed = ['name', 'webhookUrl', 'webhookSecret', 'spreadBps', 'policy', 'wallets'];
   for (const k of Object.keys(v)) if (!allowed.includes(k)) throw new HttpError(400, `Unknown field "${k}". Allowed: ${allowed.join(', ')}`);
@@ -759,6 +766,13 @@ function validateMerchantInput(v: any) {
       throw new HttpError(400, 'webhookUrl must be a valid URL');
     }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new HttpError(400, 'webhookUrl must be http(s)');
+    if (opts.blockPrivateWebhookUrls) {
+      try {
+        assertPublicHttpUrl(String(v.webhookUrl));
+      } catch (err) {
+        throw new HttpError(400, `webhookUrl ${err instanceof Error ? err.message : 'is not allowed'}`);
+      }
+    }
   }
   if (v.webhookSecret !== undefined && (typeof v.webhookSecret !== 'string' || v.webhookSecret.length < 8)) throw new HttpError(400, 'webhookSecret must be a string of at least 8 characters');
   return {
