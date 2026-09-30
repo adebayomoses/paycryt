@@ -1,0 +1,7 @@
+{
+  "name": "@paycryt/example-offline-pos",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": { "@paycryt/core": "^0.1.0" }
+}

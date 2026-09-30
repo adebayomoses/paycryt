@@ -1,0 +1,20 @@
+{
+  "name": "paycryt",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source, self-hostable crypto payments toolkit built for unstable networks and local fiat rails.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["packages/*", "examples/*"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "sandbox": "node packages/server/dist/cli.js",
+    "demo:offline": "node examples/offline-pos/dist/index.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  }
+}
