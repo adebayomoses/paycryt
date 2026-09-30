@@ -31,9 +31,9 @@ Run with `PAYSTACK_TEST_KEY=sk_test_... FLUTTERWAVE_TEST_KEY=FLWSECK_TEST-... np
 
 - **Paystack `payout()`** reaches the real API with correctly-shaped requests (recipient creation succeeds; the error comes from the `/transfer` step itself) but is refused with *"You cannot initiate third party payouts as a starter business"* — a Paystack business-verification tier, changed from their dashboard, not from here.
 - **Paystack `collect()` on GHS/KES** could not be exercised: the test account used was Nigeria/NGN-scoped, and Paystack's mobile-money charge type is Ghana/Kenya-only. Needs a Ghana- or Kenya-scoped Paystack test business to verify. Relatedly, `PaystackAdapter.collect()` only implements mobile money — it has no NGN-native rail (card, bank transfer, USSD) at all, which is a real gap worth closing given Paystack's core market is Nigeria.
-- **Flutterwave `payout()`** reaches the real API but is refused with *"Please enable IP Whitelisting to access this service"* — a dashboard security setting, not a code path.
+- **Flutterwave `payout()`** reaches the real API but is refused. Two separate dashboard gates were found in sequence, neither a code path: first *"Please enable IP Whitelisting to access this service"* (Settings → API → whitelist the calling IP), then — once that was cleared — *"merchant is not enabled to make transfers"* (a compliance/business-verification step Flutterwave requires before its transfer endpoint will work at all, even in test mode).
 
-If you have accounts that clear these (a verified Paystack business, or Flutterwave with IP whitelisting configured), running the live suite again would complete the payout-path verification.
+If you have accounts that clear these (a verified Paystack business, or a Flutterwave account with both IP whitelisting and transfers/compliance enabled), running the live suite again would complete the payout-path verification.
 
 | Adapter | Payout | Collection | Notes |
 |---|---|---|---|

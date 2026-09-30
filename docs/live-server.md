@@ -2,7 +2,7 @@
 
 `PaycrytServer` has two modes. **Sandbox** (the default) uses a fake chain and made-up prices so you can develop with no accounts. **Live** (`PAYCRYT_SANDBOX=false`) watches real blockchains and prices from real exchanges. The two never mix: a live server has no simulator endpoints, and the sandbox cannot be given real chains.
 
-> **Alpha.** Each piece has been checked against its real network, and a live server has been driven end to end against real CoinGecko, Binance, Blockstream and an Ethereum RPC. But no real money has moved through the full flow. Start with small amounts and read [SECURITY.md](../SECURITY.md).
+> **Alpha.** Each piece has been checked against its real network, including a real create-and-get-paid cycle: a merchant onboarded with a freshly generated Tron wallet, a live payment created against real CoinGecko/Binance rates, and paid by a real exchange withdrawal — tx [`3f6e6450...9eb2ab`](https://tronscan.org/#/transaction/3f6e6450495b9387c2c3fa66a1a680e41ab79b61c77d2a4813783d1cb29eb2ab), detected and confirmed by the server's own polling with zero chain errors. Still start with small amounts and read [SECURITY.md](../SECURITY.md) — one successful run on one chain isn't a production guarantee.
 
 ## Start it
 
