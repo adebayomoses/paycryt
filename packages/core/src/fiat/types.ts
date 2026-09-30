@@ -70,7 +70,7 @@ export interface CollectionProvider {
 /** Minimal `fetch` shape so adapters can be tested without a network and run on any runtime. */
 export type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string },
+  init?: { method?: string; headers?: Record<string, string>; body?: string; redirect?: 'follow' | 'manual' | 'error'; signal?: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
 
 /** Sandbox provider: succeeds instantly (or fails on demand) and never contacts anyone. Idempotent by reference. */
