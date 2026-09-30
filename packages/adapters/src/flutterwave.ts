@@ -45,8 +45,15 @@ export class FlutterwaveAdapter implements SettlementProvider, CollectionProvide
 
   async getPayout(reference: string, providerRef?: string): Promise<PayoutResult> {
     if (!providerRef) throw new Error('Flutterwave needs the providerRef (transfer id) to check a payout');
-    const res = await this.call('GET', `/transfers/${encodeURIComponent(providerRef)}`);
-    return mapTransfer(reference, res.data);
+    try {
+      const res = await this.call('GET', `/transfers/${encodeURIComponent(providerRef)}`);
+      return mapTransfer(reference, res.data);
+    } catch (err) {
+      // A transfer id nothing was ever sent to is a normal status-check outcome, not an exceptional one —
+      // the same as MockSettlementProvider reports it. Anything else (auth, rate limit, ...) still throws.
+      if (err instanceof ProviderCallError && err.notFound) return { reference, status: 'failed', failureReason: 'unknown reference' };
+      throw err;
+    }
   }
 
   /** Mobile-money charge. M-Pesa (KES) and Ghana mobile money are wired up; others can be added the same way. */
@@ -67,8 +74,13 @@ export class FlutterwaveAdapter implements SettlementProvider, CollectionProvide
   }
 
   async getCollection(reference: string): Promise<CollectionResult> {
-    const res = await this.call('GET', `/transactions/verify_by_reference?tx_ref=${encodeURIComponent(reference)}`);
-    return mapCharge(reference, res);
+    try {
+      const res = await this.call('GET', `/transactions/verify_by_reference?tx_ref=${encodeURIComponent(reference)}`);
+      return mapCharge(reference, res);
+    } catch (err) {
+      if (err instanceof ProviderCallError && err.notFound) return { reference, status: 'failed', failureReason: 'unknown reference' };
+      throw err;
+    }
   }
 
   private async call(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>) {
@@ -78,8 +90,24 @@ export class FlutterwaveAdapter implements SettlementProvider, CollectionProvide
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok || json.status === 'error') throw new Error(`Flutterwave ${method} ${path} failed: ${json.message ?? res.status}`);
+    if (!res.ok || json.status === 'error') {
+      // Verified live: Flutterwave is inconsistent about this — an unknown transfer id is HTTP 404 ("Transfer
+      // not found"), but an unknown transaction reference (verify_by_reference) is HTTP 400 ("No transaction
+      // was found for this id" — note "found" without the words "not found" adjacent).
+      const notFound = res.status === 404 || /not found|\bno\b.*\bfound\b/i.test(String(json.message ?? ''));
+      throw new ProviderCallError(`Flutterwave ${method} ${path} failed: ${json.message ?? res.status}`, notFound);
+    }
     return json;
+  }
+}
+
+/** Carries whether a failed call means "nothing there" (safe to report as a status) vs a real error (must throw). */
+class ProviderCallError extends Error {
+  constructor(
+    message: string,
+    readonly notFound: boolean,
+  ) {
+    super(message);
   }
 }
 

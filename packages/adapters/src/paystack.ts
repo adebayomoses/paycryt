@@ -41,8 +41,16 @@ export class PaystackAdapter implements SettlementProvider, CollectionProvider {
   }
 
   async getPayout(reference: string): Promise<PayoutResult> {
-    const res = await this.call('GET', `/transfer/verify/${encodeURIComponent(reference)}`);
-    return mapTransfer(reference, res.data);
+    try {
+      const res = await this.call('GET', `/transfer/verify/${encodeURIComponent(reference)}`);
+      return mapTransfer(reference, res.data);
+    } catch (err) {
+      // A reference that was never sent to Paystack (or hasn't landed there yet) is a normal outcome for a
+      // status check, not an exceptional one — the same as MockSettlementProvider reports it. Anything else
+      // (auth, rate limit, ...) still throws.
+      if (err instanceof ProviderCallError && err.notFound) return { reference, status: 'failed', failureReason: 'unknown reference' };
+      throw err;
+    }
   }
 
   /** Mobile-money charge (Ghana, Kenya, ...). The customer approves a prompt on their phone. */
@@ -53,14 +61,21 @@ export class PaystackAdapter implements SettlementProvider, CollectionProvider {
       amount: Number(req.amountMinor),
       currency: req.currency,
       reference: req.reference,
-      mobile_money: { phone: req.mobileMoney.phone, provider: req.mobileMoney.operator.toLowerCase() },
+      // Paystack's own `GET /bank?currency=GHS&type=mobile_money` returns provider codes uppercase (MTN, ATL, VOD),
+      // confirmed live; pass the operator through as given rather than guessing at a lowercase form.
+      mobile_money: { phone: req.mobileMoney.phone, provider: req.mobileMoney.operator },
     });
     return mapCharge(req.reference, res.data);
   }
 
   async getCollection(reference: string): Promise<CollectionResult> {
-    const res = await this.call('GET', `/transaction/verify/${encodeURIComponent(reference)}`);
-    return mapCharge(reference, res.data);
+    try {
+      const res = await this.call('GET', `/transaction/verify/${encodeURIComponent(reference)}`);
+      return mapCharge(reference, res.data);
+    } catch (err) {
+      if (err instanceof ProviderCallError && err.notFound) return { reference, status: 'failed', failureReason: 'unknown reference' };
+      throw err;
+    }
   }
 
   private async call(method: 'GET' | 'POST', path: string, body?: unknown) {
@@ -70,8 +85,21 @@ export class PaystackAdapter implements SettlementProvider, CollectionProvider {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok || json.status === false) throw new Error(`Paystack ${method} ${path} failed: ${json.message ?? res.status}`);
+    if (!res.ok || json.status === false) {
+      // Verified live: an unknown transfer/transaction reference comes back as HTTP 404 with code "not_found".
+      throw new ProviderCallError(`Paystack ${method} ${path} failed: ${json.message ?? res.status}`, res.status === 404);
+    }
     return json;
+  }
+}
+
+/** Carries whether a failed call means "nothing there" (safe to report as a status) vs a real error (must throw). */
+class ProviderCallError extends Error {
+  constructor(
+    message: string,
+    readonly notFound: boolean,
+  ) {
+    super(message);
   }
 }
 

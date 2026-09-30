@@ -105,7 +105,18 @@ describe('PaystackAdapter', () => {
       mobileMoney: { operator: 'MTN', phone: '233240000000' },
     });
     expect(res).toMatchObject({ status: 'pending_customer_action', instruction: 'Approve on your phone' });
-    expect(calls[0]!.body).toMatchObject({ amount: 10_000, mobile_money: { provider: 'mtn' } });
+    expect(calls[0]!.body).toMatchObject({ amount: 10_000, mobile_money: { provider: 'MTN' } }); // Paystack's own bank list returns codes uppercase
+  });
+
+  it('reports an unknown reference as a failed status, not a thrown error — verified live as HTTP 404 "not_found"', async () => {
+    const { fetch } = mockFetch({ status: 404, json: { status: false, message: 'Transfer not found', code: 'not_found' } });
+    const r = await new PaystackAdapter('k', fetch).getPayout('nope');
+    expect(r).toEqual({ reference: 'nope', status: 'failed', failureReason: 'unknown reference' });
+  });
+
+  it('still throws on a real error while checking status (not just a missing reference)', async () => {
+    const { fetch } = mockFetch({ status: 401, json: { status: false, message: 'Invalid key' } });
+    await expect(new PaystackAdapter('bad', fetch).getPayout('r')).rejects.toThrow('Invalid key');
   });
 });
 
@@ -139,5 +150,20 @@ describe('FlutterwaveAdapter', () => {
     expect(res).toMatchObject({ status: 'pending_customer_action', instruction: 'Enter your M-Pesa PIN' });
     expect(calls[0]!.url).toContain('/charges?type=mpesa');
     await expect(fw.collect({ reference: 'c10', currency: 'NGN', amountMinor: 1n, email: 'a@b.co', mobileMoney: { operator: 'X', phone: '1' } })).rejects.toThrow('mapped');
+  });
+
+  it('reports an unknown reference as a failed status, not a thrown error — verified live as HTTP 404 and HTTP 400 both', async () => {
+    // Flutterwave itself is inconsistent: /transfers/:id answers 404, but verify_by_reference answers 400
+    // with a "not found"-worded message. Both must map the same way.
+    const { fetch: fetch404 } = mockFetch({ status: 404, json: { status: 'error', message: 'Transfer not found', data: null } });
+    expect(await new FlutterwaveAdapter('k', fetch404).getPayout('r', '999')).toEqual({ reference: 'r', status: 'failed', failureReason: 'unknown reference' });
+
+    const { fetch: fetch400 } = mockFetch({ status: 400, json: { status: 'error', message: 'No transaction was found for this id', data: null } });
+    expect(await new FlutterwaveAdapter('k', fetch400).getCollection('r')).toEqual({ reference: 'r', status: 'failed', failureReason: 'unknown reference' });
+  });
+
+  it('still throws on a real error while checking status (not just a missing reference)', async () => {
+    const { fetch } = mockFetch({ status: 401, json: { status: 'error', message: 'Invalid authorization key' } });
+    await expect(new FlutterwaveAdapter('bad', fetch).getPayout('r', '1')).rejects.toThrow('Invalid authorization key');
   });
 });
