@@ -119,8 +119,10 @@ export class OfflinePOS {
         prevHash: cached.hash,
       });
       snapshots.push(priced);
-    } else if (now > cached.lockedUntil) {
-      // Online but the cached lock lapsed: re-lock the same market rate for a short window rather than fail the sale.
+    } else if (cached.lockedUntil < now + policy.expiryMs) {
+      // Online, but the cached lock would end before this request does (it has lapsed, or is about to). The server
+      // refuses a request that outlives the rate it was priced with, so re-lock the same market rate for the request's
+      // whole life rather than fail the sale, or send one the server will reject after the customer has paid.
       priced = deriveSnapshot(cached, { extraSpreadBps: 0, reason: 'cached rate re-locked', now, lockedUntil: now + policy.expiryMs, prevHash: cached.hash });
       snapshots.push(priced);
     }
@@ -143,6 +145,12 @@ export class OfflinePOS {
     const op: SyncOp = { opId: randomId('op'), deviceId: this.o.deviceId, type: 'payment.create', createdAt: now, request, snapshots, addressIndex: index };
     await this.o.store.set(K.op(seq), op);
     return { request, uri: paymentUri(request) };
+  }
+
+  /** How many addresses this device can still hand out from its current lease. Renew while this is still above zero. */
+  async leaseRemaining(): Promise<number> {
+    const next = Math.max((await this.o.store.get<number>(K.next)) ?? this.o.lease.start, this.o.lease.start);
+    return Math.max(0, this.o.lease.end - next);
   }
 
   async pending(): Promise<SyncOp[]> {
@@ -176,6 +184,10 @@ export class OfflinePOS {
       } catch {
         break;
       }
+      // Anything that is not one of the three results we understand (a rate-limit body, a proxy error page, a server
+      // that is mid-restart) is a failed delivery, not an answer. Keep the sale queued and try again later; deleting
+      // it here would silently lose a sale the customer may already have paid for.
+      if (res?.status !== 'accepted' && res?.status !== 'duplicate' && res?.status !== 'rejected') break;
       if (res.status === 'accepted') summary.accepted++;
       else if (res.status === 'duplicate') summary.duplicates++;
       else if (res.status === 'rejected') {
@@ -189,7 +201,10 @@ export class OfflinePOS {
   }
 
   private async leaseIndex(): Promise<number> {
-    const next = (await this.o.store.get<number>(K.next)) ?? this.o.lease.start;
+    // `Math.max`: after a lease renewal the new range is disjoint from (and above) the old one, so a cursor left over
+    // from the old range must not be used. Addresses outside the device's lease are refused by the server after the
+    // customer has already paid them.
+    const next = Math.max((await this.o.store.get<number>(K.next)) ?? this.o.lease.start, this.o.lease.start);
     if (next >= this.o.lease.end) throw new LeaseExhaustedError();
     await this.o.store.set(K.next, next + 1);
     return next;

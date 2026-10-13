@@ -237,6 +237,11 @@ function renderShell() {
     ['rates', 'Rates & audit'],
     [state.role === 'admin' ? 'admin' : 'account', state.role === 'admin' ? 'Admin' : 'Account'],
   ];
+  // A till opens the POS app; show the link only when this server actually has it built.
+  const posLink = h('a', { class: 'btn small hidden', href: '/ui/pos.html' }, 'Open POS');
+  if (state.role === 'merchant') {
+    fetch('/ui/pos.js', { method: 'HEAD' }).then((r) => r.ok && posLink.classList.remove('hidden')).catch(() => undefined);
+  }
   appEl.append(
     h(
       'header',
@@ -245,6 +250,7 @@ function renderShell() {
       h('span', { class: `pill ${sandbox ? 'sandbox' : 'live'}`, title: sandbox ? 'Fake chain and simulated deposits. No real money moves.' : 'Real chains and real prices.' }, sandbox ? 'SANDBOX · fake money' : 'LIVE · real funds'),
       h('span', { class: 'grow' }),
       h('span', { class: 'muted small' }, state.role === 'admin' ? 'Signed in as operator' : `Signed in as ${state.me.merchant?.name ?? 'merchant'}`),
+      posLink,
       h('button', { class: 'btn small', type: 'button', onclick: () => signOut() }, 'Sign out'),
     ),
     h(

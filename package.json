@@ -10,13 +10,15 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node packages/server/scripts/build-pos.mjs",
     "test": "vitest run",
     "sandbox": "node packages/server/dist/cli.js",
-    "demo:offline": "node examples/offline-pos/dist/index.js"
+    "demo:offline": "node examples/offline-pos/dist/index.js",
+    "e2e:pos": "node packages/server/scripts/e2e-pos.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.27.7",
     "typescript": "^5.6.0",
     "vitest": "^5.0.3"
   }

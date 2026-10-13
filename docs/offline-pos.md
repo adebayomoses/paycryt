@@ -1,5 +1,7 @@
 # Offline-first POS
 
+> **Want the app, not the library?** The server ships an installable till built on this: see [pos.md](pos.md). This page is the engine underneath it.
+
 A till that stops working when the internet drops is a till that loses sales. `OfflinePOS` keeps creating valid, priced, payable requests with no network, and the server safely reconciles them afterwards.
 
 ## The flow

@@ -11,6 +11,8 @@ npm run build && npm run sandbox
 
 It is plain HTML, CSS and JavaScript served by the server itself: no framework, no build step, no third-party scripts, nothing to deploy separately.
 
+A merchant who signs in gets an **Open POS** link to the [offline POS app](pos.md).
+
 ## What you can do
 
 | | Operator (admin key) | Merchant (their own key) |

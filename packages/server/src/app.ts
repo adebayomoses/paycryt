@@ -42,7 +42,7 @@ import {
   withPolicy,
 } from '@paycryt/core';
 import { AuditLogStore } from './audit.js';
-import { DashboardAssets, UI_HEADERS } from './ui.js';
+import { DashboardAssets, POS_PATH, UI_HEADERS } from './ui.js';
 import { RateLimiter } from './rate-limit.js';
 
 export interface ServerConfig {
@@ -334,6 +334,11 @@ export class PaycrytServer {
       // The dashboard's own files are public (they hold no data and no key); everything it shows comes from the API.
       // Served before authentication on purpose, and outside the rate limiters, since they are not API calls.
       if ((method === 'GET' || method === 'HEAD') && this.dashboard) {
+        // /pos is a friendly address; the app itself must live under /ui/ so its service worker's scope covers it.
+        if (path === '/pos' && this.dashboard.hasPos) {
+          res.writeHead(302, { location: POS_PATH, ...UI_HEADERS });
+          return void res.end();
+        }
         const asset = this.dashboard.lookup(path);
         if (asset) {
           res.writeHead(200, { 'content-type': asset.type, 'content-length': asset.body.length, ...UI_HEADERS });

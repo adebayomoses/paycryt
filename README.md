@@ -10,11 +10,18 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 
 ![The Paycryt dashboard: a payment awaiting funds, with its QR code and the exact amount to send](docs/dashboard.jpg)
 
+<p align="center">
+  <img src="docs/pos-sell.jpg" alt="The offline POS: amount keypad" width="230">
+  <img src="docs/pos-offline.jpg" alt="The offline POS selling with no connection: exact amount, QR code and a safety-margin note" width="230">
+  <img src="docs/pos-sales.jpg" alt="The offline POS sales list after reconnecting" width="230">
+</p>
+
 ## What makes it different
 
 | | |
 |---|---|
 | **Offline-first POS** | A till keeps creating payment requests with no internet: addresses are derived locally from an xpub, prices come from a cached rate plus a safety margin, and everything reconciles on sync. The server re-verifies every request and trusts nothing the device says. → [docs](docs/offline-pos.md) |
+| **Offline POS app** | An installable phone/tablet till served by your own server: keypad, QR code, exact amount, and a plain Online/Offline badge. It reloads and keeps selling with the server down, queues sales on the device, and sends them by itself when the connection returns. Proven in a real Chrome by killing the server mid-session (`npm run e2e:pos`). → [docs](docs/pos.md) |
 | **Local fiat & mobile-money adapters** | Off-ramp and on-ramp through interfaces, with experimental Paystack and Flutterwave adapters (bank + MTN MoMo / M-Pesa style wallets). → [docs](docs/adapters.md) |
 | **Fair-rate audit trail** | Every price a customer is charged is a hash-sealed, hash-chained snapshot: the sources, the outliers dropped, the median, your spread. Anyone can re-verify it later. → [docs](docs/fair-rate.md) |
 | **Underpayment & overpayment handling** | Tolerances, grace windows, top-ups, credits and refunds, expressed as a pure function that returns *actions* for your app to perform. A configurable late-watch window keeps catching stray deposits on an address for up to 24h (default) after a payment closes, instead of going silent the instant it finalizes. → [docs](docs/payment-policies.md) |
@@ -33,12 +40,12 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 ```bash
 npm install
 npm run build
-npm test                # 316 tests
+npm test                # 358 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```
 
-Then open **http://127.0.0.1:8787/** in a browser and sign in with the key `sandbox_key`: create a payment, scan its QR code, and use the sandbox buttons to play the customer. See the [dashboard docs](docs/dashboard.md).
+Then open **http://127.0.0.1:8787/** in a browser and sign in with the key `sandbox_key`: create a payment, scan its QR code, and use the sandbox buttons to play the customer. See the [dashboard docs](docs/dashboard.md). To try the till, add a merchant there and open **http://127.0.0.1:8787/pos** on a phone or another tab: see [docs/pos.md](docs/pos.md).
 
 With the sandbox running:
 
