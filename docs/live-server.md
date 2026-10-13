@@ -37,6 +37,7 @@ node packages/server/dist/cli.js
 | `PAYCRYT_RATE_LIMIT_PER_MINUTE`, `PAYCRYT_RATE_LIMIT_BURST` | Requests allowed per minute for each authenticated key (default 120, burst = that value). `0` disables it. |
 | `PAYCRYT_AUTH_FAILURES_PER_MINUTE` | Failed-auth attempts allowed per minute per source IP (default 20). `0` disables it. |
 | `PAYCRYT_TRUST_PROXY` | `true` trusts the first `X-Forwarded-For` hop as the caller's IP. Only turn this on behind a proxy you control. |
+| `PAYCRYT_DISABLE_UI` | `true` switches off the built-in [web dashboard](dashboard.md), leaving an API-only server. |
 
 Every setting is validated at startup, and the error names the variable to fix. RPC URLs often carry an API key in the path, so the startup summary prints only their host.
 

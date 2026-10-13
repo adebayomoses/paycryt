@@ -42,6 +42,7 @@ import {
   withPolicy,
 } from '@paycryt/core';
 import { AuditLogStore } from './audit.js';
+import { DashboardAssets, UI_HEADERS } from './ui.js';
 import { RateLimiter } from './rate-limit.js';
 
 export interface ServerConfig {
@@ -88,6 +89,11 @@ export interface ServerConfig {
   authFailuresPerMinute?: number;
   /** Trust the first hop of `X-Forwarded-For` as the caller's real IP. Only enable this behind a proxy you control — otherwise a caller can forge the header to dodge the auth-failure limiter. Default false. */
   trustProxy?: boolean;
+  /**
+   * Serve the built-in web dashboard at `/`. Default true. It is static files plus the same API, gated by the same
+   * keys, but an API-only deployment can switch it off to expose less.
+   */
+  ui?: boolean;
 }
 
 const ASSET_LIST = ASSETS as Record<string, Asset>;
@@ -131,6 +137,7 @@ export class PaycrytServer {
   private readonly kv: KVStore;
   private readonly merchants: MerchantStore;
   private readonly audit: AuditLogStore;
+  private readonly dashboard?: DashboardAssets;
   private readonly requestLimiter?: RateLimiter;
   private readonly authFailureLimiter?: RateLimiter;
   private readonly receiver: SyncReceiver;
@@ -191,6 +198,7 @@ export class PaycrytServer {
     this.kv = config.store ?? new MemoryStore();
     this.merchants = new MerchantStore(this.kv);
     this.audit = new AuditLogStore(this.kv);
+    this.dashboard = config.ui === false ? undefined : DashboardAssets.load();
     this.requestLimiter = config.requestsPerMinute ? new RateLimiter(config.requestsPerMinute, config.requestBurst ?? config.requestsPerMinute, now) : undefined;
     this.authFailureLimiter = config.authFailuresPerMinute ? new RateLimiter(config.authFailuresPerMinute, config.authFailuresPerMinute, now) : undefined;
 
@@ -323,6 +331,16 @@ export class PaycrytServer {
 
       if (method === 'GET' && path === '/health') return send(res, 200, { ok: true, sandbox: !!this.config.sandbox, mode: this.config.sandbox ? 'sandbox' : 'live' });
 
+      // The dashboard's own files are public (they hold no data and no key); everything it shows comes from the API.
+      // Served before authentication on purpose, and outside the rate limiters, since they are not API calls.
+      if ((method === 'GET' || method === 'HEAD') && this.dashboard) {
+        const asset = this.dashboard.lookup(path);
+        if (asset) {
+          res.writeHead(200, { 'content-type': asset.type, 'content-length': asset.body.length, ...UI_HEADERS });
+          return void res.end(method === 'HEAD' ? undefined : asset.body);
+        }
+      }
+
       let auth: Auth;
       try {
         auth = await this.authenticate(req);
@@ -350,6 +368,11 @@ export class PaycrytServer {
         this.requireAdmin(auth);
         const limit = Math.min(500, Math.max(1, Math.trunc(Number(url.searchParams.get('limit') ?? 100)) || 100));
         return send(res, 200, await this.audit.recent(limit));
+      }
+
+      // What this server can take payments in: the asset and currency catalogue, and which chains are actually wired.
+      if (method === 'GET' && path === '/v1/assets') {
+        return send(res, 200, { assets: ASSET_LIST, currencies: CURRENCIES, chains: [...this.chains.keys()] });
       }
 
       if (method === 'GET' && path === '/v1/me') {

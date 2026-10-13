@@ -15,6 +15,8 @@ or with Docker: `docker compose up` (see [docker-compose.yml](../docker-compose.
 
 Environment: `PORT`, `HOST`, `PAYCRYT_API_KEY`, `PAYCRYT_SPREAD_BPS`, `PAYCRYT_WEBHOOK_URL`, `PAYCRYT_WEBHOOK_SECRET`, `PAYCRYT_SANDBOX=false` (turns the sandbox off; then a non-default API key is required).
 
+**Prefer clicking to curl?** Open <http://127.0.0.1:8787/> and sign in with `sandbox_key`. The [web dashboard](dashboard.md) has every sandbox scenario as a button, next to the payment it acts on.
+
 ## API (all under `Authorization: Bearer <key>`)
 
 | Method & path | Purpose |

@@ -5,7 +5,10 @@
   "description": "Open-source, self-hostable crypto payments toolkit built for unstable networks and local fiat rails.",
   "license": "MIT",
   "type": "module",
-  "workspaces": ["packages/*", "examples/*"],
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
@@ -13,8 +16,8 @@
     "demo:offline": "node examples/offline-pos/dist/index.js"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^5.0.3"
   }
 }

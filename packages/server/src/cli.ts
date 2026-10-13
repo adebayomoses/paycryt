@@ -68,12 +68,14 @@ const server = await PaycrytServer.create({
   requestBurst,
   authFailuresPerMinute: authFailuresPerMinute || undefined,
   trustProxy,
+  ui: process.env.PAYCRYT_DISABLE_UI !== 'true',
 });
 
 const host = process.env.HOST ?? '127.0.0.1';
 const actual = await server.listen(port, host);
 console.log(`Paycryt ${sandbox ? 'SANDBOX' : 'LIVE'} server listening on http://${host}:${actual}`);
 console.log(`  API key:  ${sandbox ? apiKey : '(from PAYCRYT_API_KEY)'}`);
+if (process.env.PAYCRYT_DISABLE_UI !== 'true') console.log(`  Dashboard: http://${host}:${actual}/`);
 console.log(`  Storage:  ${dbPath ? `SQLite at ${dbPath} (survives restarts)` : 'in-memory (set PAYCRYT_DB_PATH to persist)'}`);
 console.log(
   `  Rate limits: ${requestsPerMinute || 'off'}${requestsPerMinute ? `/min per key (burst ${requestBurst ?? requestsPerMinute})` : ''}, ${authFailuresPerMinute || 'off'}${authFailuresPerMinute ? '/min failed auth per IP' : ''}${trustProxy ? ' (trusting X-Forwarded-For)' : ''}`,

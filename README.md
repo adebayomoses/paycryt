@@ -8,6 +8,8 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 
 > **Status: alpha (0.1).** The core logic is tested and the sandbox is complete. All three targeted chains now have a real, live-verified address deriver and chain adapter: [Tron/TRC20](docs/tron.md), [EVM](docs/evm.md) and [Bitcoin](docs/bitcoin.md) — the EVM and Bitcoin ones were each checked, unmocked, against their real mainnets (173 real USDT deposits found on Ethereum; 29 real BTC deposits found and independently cross-checked). The server runs **live** on those chains with real exchange rates ([docs](docs/live-server.md)), and a full create-payment-and-get-paid cycle has now been completed for real on Tron — a real exchange withdrawal, correctly derived, priced, detected and confirmed by the server's own polling. EVM and Bitcoin haven't had that full cycle yet, only real deposit-reading, and the Paystack/Flutterwave fiat adapters are experimental. Do not point it at real money without your own review.
 
+![The Paycryt dashboard: a payment awaiting funds, with its QR code and the exact amount to send](docs/dashboard.jpg)
+
 ## What makes it different
 
 | | |
@@ -22,6 +24,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 | **Bitcoin (native SegWit)** | A real, non-custodial BIP84 address deriver and a chain watcher over the Esplora REST API (blockstream.info, mempool.space, or self-hosted). Checked live against Bitcoin mainnet: 29 real deposits parsed, matched exactly against an independent recomputation. Experimental. → [docs](docs/bitcoin.md) |
 | **Live server** | `PAYCRYT_SANDBOX=false` runs the server on real Tron/EVM/Bitcoin watchers and real CoinGecko/Binance rates. It refuses fake chains and made-up prices, requires a database, skips already-used addresses, and answers 503 instead of guessing when a rate or address check fails. Never credits a new payment with old funds. → [docs](docs/live-server.md) |
 | **Rate limiting & audit log** | Every authenticated caller has its own request budget (429 + Retry-After when exceeded), a separate limiter slows down API-key guessing without throttling legitimate callers, and `GET /v1/admin/audit` records merchant lifecycle changes newest-first, never a secret. Off by default if you embed the server, on by default from the CLI. → [docs](docs/live-server.md#rate-limiting-and-the-audit-log) |
+| **Web dashboard** | Open the server in a browser: create payments with a QR code and the exact amount, watch them settle, simulate customers in the sandbox, look up rates and verify the audit chain, onboard merchants. Plain HTML/CSS/JS served by the server itself, no build step, no third-party scripts, key held in memory only. → [docs](docs/dashboard.md) |
 | **Multi-tenant API keys** | One server, many businesses: an admin key onboards merchants, each with their own key (stored only as a hash), spread, policy defaults, webhook secret and **own wallet keys, so customers pay the merchant directly**. A merchant sees only their own payments, events, payouts and devices; someone else's payment id answers exactly like a missing one. Isolation is mutation-tested and survives a real restart. Offline sync now also refuses a device that forges its own asset, policy, expiry or payment id. → [docs](docs/multi-tenant.md) |
 | **Persistence** | `SqliteStore` (`node:sqlite`, no native dependency) for `OfflinePOS` and the reference server — payments, the rate audit trail and address leases all survive a restart. Verified with a real process restart: a fresh `node` process reloaded and paid a payment created by a different, already-killed process. `IndexedDbStore` covers the browser/WebView side of `OfflinePOS`, verified with a real page navigation. → [docs](docs/persistence.md) |
 
@@ -30,10 +33,12 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 ```bash
 npm install
 npm run build
-npm test                # 285 tests
+npm test                # 316 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```
+
+Then open **http://127.0.0.1:8787/** in a browser and sign in with the key `sandbox_key`: create a payment, scan its QR code, and use the sandbox buttons to play the customer. See the [dashboard docs](docs/dashboard.md).
 
 With the sandbox running:
 

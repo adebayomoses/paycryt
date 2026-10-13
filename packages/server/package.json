@@ -7,6 +7,6 @@
   "bin": { "paycryt-sandbox": "./dist/cli.js" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": ["dist", "ui"],
   "dependencies": { "@paycryt/core": "^0.1.0", "@paycryt/adapters": "^0.1.0" }
 }
