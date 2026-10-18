@@ -61,6 +61,8 @@ export interface DeviceConfig {
   currency: string;
   /** Chains the server is actually watching. */
   chains: string[];
+  /** Asset keys (e.g. USDT_TRC20) the server can really see paid. Older pairings lack this and are treated as "all" until the next refresh. */
+  assets?: string[];
   leases: Array<{ start: number; end: number }>;
   /** `SYMBOL/CUR` -> when the cached rate snapshot was issued. */
   rates: Record<string, number>;
@@ -247,6 +249,7 @@ export class PosDevice {
       sandbox: !!health?.sandbox,
       currency: input.currency,
       chains: catalog.chains,
+      assets: Object.keys(catalog.assets),
       leases: [{ start: lease.start, end: lease.end }],
       rates: {},
       pairedAt: this.clock(),
@@ -288,7 +291,8 @@ export class PosDevice {
   candidateKeys(): string[] {
     const cfg = this.requireConfig();
     return Object.entries(ASSETS as Record<string, Asset>)
-      .filter(([, a]) => cfg.chains.includes(a.chain) && !!this.deriverFor(a))
+      // Never offer what the server cannot watch: a sale the server then refuses may already have been paid by the customer.
+      .filter(([k, a]) => cfg.chains.includes(a.chain) && (!cfg.assets || cfg.assets.includes(k)) && !!this.deriverFor(a))
       .map(([k]) => k);
   }
 
@@ -353,7 +357,9 @@ export class PosDevice {
       const cfg = this.requireConfig();
       const me = await this.api('/v1/me');
       cfg.merchant = { id: me.merchant.id, name: me.merchant.name, wallets: me.merchant.wallets ?? {}, spreadBps: me.merchant.spreadBps };
-      cfg.chains = (await this.api('/v1/assets')).chains;
+      const catalog = await this.api('/v1/assets');
+      cfg.chains = catalog.chains;
+      cfg.assets = Object.keys(catalog.assets);
       await this.save();
       if ((await this.pos().leaseRemaining()) < Math.max(10, LEASE_SIZE / 10)) await this.renewLeaseNow();
       return { failed: [] as string[] };
@@ -368,7 +374,8 @@ export class PosDevice {
       const asset = (ASSETS as Record<string, Asset>)[input.assetKey];
       if (!asset) throw new Error('Choose what the customer pays in.');
       const deriver = this.deriverFor(asset);
-      if (!deriver || !cfg.chains.includes(asset.chain)) throw new Error(`${asset.symbol} on ${asset.chain} is not set up for this shop.`);
+      // The same list the screen offers, enforced here too, so it cannot be bypassed and never rests on a rate happening to be missing.
+      if (!deriver || !this.candidateKeys().includes(input.assetKey)) throw new Error(`${asset.symbol} on ${asset.chain} is not set up for this shop.`);
       const currency = CURRENCIES[cfg.currency as keyof typeof CURRENCIES];
       let amountMinor: bigint;
       try {

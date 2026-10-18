@@ -1,4 +1,4 @@
-import type { ChainAdapter, ChainDeposit, FetchLike } from '@paycryt/core';
+import type { Asset, ChainAdapter, ChainDeposit, FetchLike } from '@paycryt/core';
 
 export interface EsploraOptions {
   fetch: FetchLike;
@@ -43,6 +43,11 @@ export class EsploraChainAdapter implements ChainAdapter {
   constructor(private readonly opts: EsploraOptions) {
     this.baseUrl = opts.baseUrl ?? 'https://blockstream.info/api';
     this.clock = opts.clock ?? Date.now;
+  }
+
+  /** Bitcoin only. */
+  supportsAsset(asset: Asset): boolean {
+    return asset.chain === this.chain && asset.symbol === 'BTC' && !asset.contract;
   }
 
   async getDeposits(address: string, assetSymbol: string): Promise<ChainDeposit[]> {

@@ -1,4 +1,4 @@
-import type { ChainAdapter, ChainDeposit, FetchLike } from '@paycryt/core';
+import type { Asset, ChainAdapter, ChainDeposit, FetchLike } from '@paycryt/core';
 
 /** TRC20 contract addresses for symbols this adapter knows about. Matches `ASSETS.USDT_TRC20.contract` in @paycryt/core. */
 const DEFAULT_CONTRACTS: Record<string, string> = {
@@ -83,6 +83,12 @@ export class TronGridChainAdapter implements ChainAdapter {
     this.tipCacheMs = opts.tipCacheMs ?? 2_500;
     this.blockCacheSize = opts.blockCacheSize ?? 5_000;
     this.clock = opts.clock ?? Date.now;
+  }
+
+  /** TRC20 tokens this adapter has a contract for (USDT by default). */
+  supportsAsset(asset: Asset): boolean {
+    const known = this.contracts[asset.symbol];
+    return asset.chain === this.chain && !!known && asset.contract === known;
   }
 
   async getDeposits(address: string, assetSymbol: string): Promise<ChainDeposit[]> {

@@ -218,6 +218,8 @@ export class PaycrytServer {
     this.receiver = new SyncReceiver({
       deriver: this.deriver,
       leases: this.leases,
+      // A till prices in whatever the asset table says; the server must only accept what its watcher can see paid.
+      allowedAssets: Object.values(ASSET_LIST).filter((a) => this.watchable(a)),
       // Each tenant's offline payments must derive from THEIR wallet and run under THEIR policy, never the device's own.
       resolveDeriver: async (op) => this.addressSource(await this.merchantOf(op.request.merchantId), op.request.asset?.chain),
       policyFor: async (op) => withPolicy(mergePolicyOverrides((await this.merchantOf(op.request.merchantId))?.policy)),
@@ -384,7 +386,7 @@ export class PaycrytServer {
 
       // What this server can take payments in: the asset and currency catalogue, and which chains are actually wired.
       if (method === 'GET' && path === '/v1/assets') {
-        return send(res, 200, { assets: ASSET_LIST, currencies: CURRENCIES, chains: [...this.chains.keys()] });
+        return send(res, 200, { assets: Object.fromEntries(Object.entries(ASSET_LIST).filter(([, a]) => this.watchable(a))), currencies: CURRENCIES, chains: [...this.chains.keys()] });
       }
 
       if (method === 'GET' && path === '/v1/me') {
@@ -526,6 +528,12 @@ export class PaycrytServer {
     return id ? this.merchants.get(id) : undefined;
   }
 
+  /** Can the chain watcher for this asset's chain actually see payments in it? */
+  private watchable(asset: Asset): boolean {
+    const chain = this.chains.get(asset.chain);
+    return !!chain && (chain.supportsAsset ? chain.supportsAsset(asset) : true);
+  }
+
   /** The deriver for this merchant's wallet on `chain`, or undefined if they have none configured. */
   private addressSource(merchant: Merchant | undefined, chain: string | undefined): AddressDeriver | undefined {
     const family = chain ? walletFamilyForChain(chain) : undefined;
@@ -607,6 +615,7 @@ export class PaycrytServer {
     if (!asset) throw new HttpError(400, `Unknown asset "${input.asset}". Try one of: ${Object.keys(ASSET_LIST).join(', ')}`);
     const chain = this.chains.get(asset.chain);
     if (!chain) throw new HttpError(400, `No chain adapter for ${asset.chain}`);
+    if (!this.watchable(asset)) throw new HttpError(400, `This server cannot watch ${asset.symbol} on ${asset.chain}, so it will not take payments in it.`);
     const policy = withPolicy(mergePolicyOverrides(merchant?.policy, validatePolicyOverrides(input.policy)));
     const metadata = validateMetadata(input.metadata);
 

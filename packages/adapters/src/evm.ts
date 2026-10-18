@@ -77,6 +77,14 @@ export class EvmRpcChainAdapter implements ChainAdapter {
     this.lookbackBlocks = lookback;
   }
 
+  /** ERC-20 tokens this adapter has a contract for. Native ETH has no transfer log, so it can never be watched here. */
+  supportsAsset(asset: Asset): boolean {
+    if (asset.chain !== this.chain) return false;
+    const known = this.contracts[asset.symbol];
+    // Same symbol but a different contract is a different token: never treat it as watched.
+    return !!known && !!asset.contract && known.toLowerCase() === asset.contract.toLowerCase();
+  }
+
   async getDeposits(address: string, assetSymbol: string): Promise<ChainDeposit[]> {
     const contract = this.contracts[assetSymbol];
     if (!contract) throw new Error(`EvmRpcChainAdapter (${this.chain}): no ERC20 contract configured for asset "${assetSymbol}"`);
