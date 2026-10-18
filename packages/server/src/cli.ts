@@ -55,6 +55,8 @@ const server = await PaycrytServer.create({
   sandbox,
   webhookUrl: process.env.PAYCRYT_WEBHOOK_URL,
   webhookSecret: process.env.PAYCRYT_WEBHOOK_SECRET,
+  // Live mode refuses merchant webhook URLs aimed at private/internal hosts unless you explicitly allow them.
+  blockPrivateWebhookUrls: !sandbox && process.env.PAYCRYT_ALLOW_PRIVATE_WEBHOOKS !== 'true',
   spreadBps: process.env.PAYCRYT_SPREAD_BPS ? Number(process.env.PAYCRYT_SPREAD_BPS) : undefined,
   // Set PAYCRYT_DB_PATH to persist payments, merchants and the rate audit trail across restarts.
   store: dbPath ? new SqliteStore(dbPath) : undefined,
