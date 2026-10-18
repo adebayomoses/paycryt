@@ -1,12 +1,21 @@
 {
   "name": "@paycryt/server",
   "version": "0.1.0",
-  "description": "Optional Paycryt reference API server with a built-in fake-chain sandbox.",
+  "description": "Self-hosted Paycryt server: REST API, web dashboard and an installable offline-first POS app. Runs in a fake-chain sandbox or live on Tron, EVM and Bitcoin. Non-custodial.",
   "license": "MIT",
+  "author": "Adebayo Moses (https://github.com/adebayomoses)",
   "type": "module",
-  "bin": { "paycryt-sandbox": "./dist/cli.js" },
+  "bin": { "paycryt": "./dist/cli.js" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "files": ["dist", "ui"],
+  "engines": { "node": ">=22.5.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/adebayomoses/paycryt.git", "directory": "packages/server" },
+  "homepage": "https://github.com/adebayomoses/paycryt#readme",
+  "bugs": { "url": "https://github.com/adebayomoses/paycryt/issues" },
+  "keywords": ["crypto", "payments", "usdt", "self-hosted", "non-custodial", "pos", "pwa", "offline-first", "dashboard", "tron", "bitcoin", "ethereum", "africa", "nigeria"],
+  "publishConfig": { "access": "public", "tag": "alpha" },
+  "scripts": { "prepublishOnly": "node ../../scripts/release-check.mjs" },
   "dependencies": { "@paycryt/core": "^0.1.0", "@paycryt/adapters": "^0.1.0" }
 }

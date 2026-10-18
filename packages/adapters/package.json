@@ -1,14 +1,21 @@
 {
   "name": "@paycryt/adapters",
   "version": "0.1.0",
-  "description": "Optional Paycryt adapters: rate sources, chain watchers, fiat rails, a node:sqlite KVStore, and an IndexedDB KVStore for browser/WebView POS devices.",
+  "description": "Optional Paycryt adapters: live Tron/EVM/Bitcoin chain watchers, CoinGecko/Binance rate sources, Paystack and Flutterwave rails, a node:sqlite store and an IndexedDB store for browser POS devices.",
   "license": "MIT",
+  "author": "Adebayo Moses (https://github.com/adebayomoses)",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "files": ["dist"],
   "engines": { "node": ">=22.5.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/adebayomoses/paycryt.git", "directory": "packages/adapters" },
+  "homepage": "https://github.com/adebayomoses/paycryt/blob/main/docs/adapters.md",
+  "bugs": { "url": "https://github.com/adebayomoses/paycryt/issues" },
+  "keywords": ["crypto", "payments", "trongrid", "usdt", "esplora", "json-rpc", "paystack", "flutterwave", "mobile-money", "indexeddb", "sqlite"],
+  "publishConfig": { "access": "public", "tag": "alpha" },
+  "scripts": { "prepublishOnly": "node ../../scripts/release-check.mjs" },
   "dependencies": { "@paycryt/core": "^0.1.0" },
   "devDependencies": { "fake-indexeddb": "^6.0.0" }
 }

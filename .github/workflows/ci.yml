@@ -20,4 +20,5 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      - run: npm run release:check # what would be published is complete and clean, on every push
       - run: npm run demo:offline

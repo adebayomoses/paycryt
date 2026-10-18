@@ -1,0 +1,65 @@
+name: Release
+
+# Publishes @paycryt/core, @paycryt/adapters and @paycryt/server to npm when a GitHub Release is published.
+# Run it by hand (Actions -> Release -> Run workflow) with "dry-run" ticked to rehearse the whole thing, including
+# installing the packed packages into an empty project, without publishing anything or needing the npm token.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build, test, pack and rehearse the publish, but do not publish
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # lets npm record build provenance: a verifiable link from each package back to this commit
+
+jobs:
+  publish:
+    # Forks that happen to publish a release must not try to push to npm.
+    if: github.repository == 'adebayomoses/paycryt'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run release:check
+
+      - name: The release tag must match the package version
+        if: github.event_name == 'release'
+        run: node scripts/release-check.mjs --tag "${{ github.event.release.tag_name }}"
+
+      - name: Install the packed packages into an empty project and use them
+        run: npm run release:smoke
+
+      - name: Rehearse the publish (nothing is uploaded)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+        run: |
+          npm publish -w packages/core --dry-run
+          npm publish -w packages/adapters --dry-run
+          npm publish -w packages/server --dry-run
+
+      - name: Publish to npm
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry-run)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::Add an npm automation token as the NPM_TOKEN repository secret first (see docs/releasing.md)."
+            exit 1
+          fi
+          # In dependency order: adapters needs core, server needs both. The "alpha" dist-tag comes from each
+          # package's publishConfig, so this can never claim "latest" by accident.
+          npm publish -w packages/core --provenance --access public
+          npm publish -w packages/adapters --provenance --access public
+          npm publish -w packages/server --provenance --access public
