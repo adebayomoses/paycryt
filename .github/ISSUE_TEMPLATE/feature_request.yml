@@ -1,0 +1,36 @@
+name: Feature request or new rail
+description: Suggest a feature, or propose a new payment rail or chain.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Who is stuck, and what do they do today? "A shop in Kano cannot take X" is more useful than "add X".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Core library, Chain adapters, Fiat adapters (new rail), Server / API, Dashboard, Offline POS app, Docs / examples]
+    validations:
+      required: true
+  - type: textarea
+    id: money
+    attributes:
+      label: Does this touch how money or keys are handled?
+      description: "If yes, say what could go wrong (a wrong amount, an address nobody watches, a leaked key) and how you would prevent it. Paycryt prefers failing closed over guessing."
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - label: I would like to build this and will open a PR
+        - label: I can test it against a real provider or chain

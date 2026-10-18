@@ -56,3 +56,7 @@ Many providers cap how many blocks `eth_getLogs` can span in one call (a few tho
 ## Choosing an RPC provider
 
 Public shared RPCs (like the one used for verification here) are rate-limited and fine for testing. For production, use your own node or a paid tier (Alchemy, Infura, Ankr, QuickNode) — they raise both the rate limit and the `eth_getLogs` range cap.
+
+## Native ETH is not supported
+
+The watcher reads ERC-20 `Transfer` logs, so it can see USDT, USDC and other tokens it has a contract for, but a plain ETH transfer leaves no such log and can never be detected here. `ETH` is in the asset table (it has a price), so rather than let a customer pay an address nobody is watching, a server **refuses** it: `/v1/assets` does not list it, `POST /v1/payments` answers 400, and a till that syncs an ETH sale is rejected. Each chain adapter reports what it can watch through `supportsAsset`; see [CONTRIBUTING.md](../CONTRIBUTING.md) when writing one. Supporting native coins is an open issue.

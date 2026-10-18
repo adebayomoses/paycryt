@@ -1,0 +1,54 @@
+name: Bug report
+description: Something does not behave as documented. For anything about moving money, please read the note first.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security problems** (a way to steal, redirect or double-count funds, leak a key, or bypass an auth check) must **not** go here. Use [private vulnerability reporting](https://github.com/adebayomoses/paycryt/security/advisories/new). See [SECURITY.md](https://github.com/adebayomoses/paycryt/blob/main/SECURITY.md).
+
+        **Never paste an API key, a mnemonic, an xpriv or a webhook secret.** Redact them, and anything else you would not post publicly.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: One short paragraph. Include exact amounts, statuses and error text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows it. A failing test is the best bug report.
+      placeholder: |
+        1. npm run sandbox
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options: [Core library, Chain adapters, Fiat adapters, Server / API, Dashboard, Offline POS app, Docs, Not sure]
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options: [Sandbox (fake chain), Live (real chains)]
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Versions
+      description: "`node -v`, the package version, OS, and browser if it is the dashboard or POS."
+      placeholder: "Node 24.11, @paycryt/server 0.1.0, Windows 11, Chrome 130"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or console output
+      render: shell

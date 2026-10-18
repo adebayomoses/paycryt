@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/adebayomoses/paycryt/security/advisories/new
+    about: Anything that could lose, redirect or double-count funds, or leak a key. Please do not open a public issue.
+  - name: Read the docs first
+    url: https://github.com/adebayomoses/paycryt/tree/main/docs
+    about: Sandbox, live server, offline POS, adapters, payment policies and more.

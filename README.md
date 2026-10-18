@@ -40,7 +40,7 @@ You bring the accounts and keys. Paycryt never holds funds, and there is nothing
 ```bash
 npm install
 npm run build
-npm test                # 358 tests
+npm test                # 366 tests
 npm run demo:offline    # a POS sells while offline, then syncs
 npm run sandbox         # API + fake chain on http://127.0.0.1:8787
 ```
