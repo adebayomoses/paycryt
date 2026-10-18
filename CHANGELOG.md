@@ -15,6 +15,7 @@ The first release. **Alpha:** a real payment has been completed end to end on Tr
 - **A self-hosted server** (`npx @paycryt/server@alpha`): REST API, multi-tenant merchants with their own wallets, per-key rate limiting, an admin audit log, signed webhooks, and a persistent store. It fails closed: no price or no address check means a 503, never a guess.
 - **A web dashboard** at `/`: create payments with a QR code and the exact amount, simulate customers in the sandbox, look up rates, and run the operator's admin tasks.
 - **An offline-first POS app** at `/pos`: an installable till that keeps selling with the server down and syncs by itself when the connection returns.
+- **Webhook hardening and an opt-in SSRF guard**: secret rotation without downtime, a timeout on every delivery attempt, no redirect following, and a literal-address check on merchant webhook URLs (on by default in live mode). Contributed by [@oasamz09-ctrl](https://github.com/oasamz09-ctrl) in [#2](https://github.com/adebayomoses/paycryt/pull/2).
 - **A fake-chain sandbox** for developing without faucets or RPC keys.
 - Experimental **Paystack** and **Flutterwave** adapters. Flutterwave M-Pesa collection is verified live; payouts reach the real APIs but are gated by each provider's account verification.
 
@@ -24,6 +25,7 @@ The first release. **Alpha:** a real payment has been completed end to end on Tr
 - Native ETH and TRX payments are not supported (the watchers read token transfers). A server refuses them rather than accept a payment it could never see.
 - The POS service worker is verified in Chrome, not Safari or Firefox.
 - No receipts, refunds screen, or multi-cashier support in the POS.
+- The webhook-URL guard checks the host as written and does not resolve DNS (documented), and it currently lets two IPv6 forms through: IPv4-compatible `[::127.0.0.1]` and 6to4 `[2002:7f00:1::]`. Practical risk is low on most hosts but it should be closed; see the open issue.
 
 ### Fixed along the way
 

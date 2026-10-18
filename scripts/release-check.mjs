@@ -20,7 +20,9 @@ const bad = (pkg, msg) => problems.push(`${pkg}: ${msg}`);
 const rootPkg = read('package.json');
 const pkgs = Object.fromEntries(PACKAGES.map((n) => [n, read(`packages/${n}/package.json`)]));
 const workspaceVersions = Object.fromEntries(Object.values(pkgs).map((p) => [p.name, p.version]));
-const rootLicense = readFileSync(root + 'LICENSE', 'utf8');
+// Compare text, not line endings: git's autocrlf can leave one copy CRLF and another LF in a Windows checkout.
+const lf = (s) => s.replace(/\r\n/g, '\n');
+const rootLicense = lf(readFileSync(root + 'LICENSE', 'utf8'));
 
 const tagAt = process.argv.indexOf('--tag');
 if (tagAt > -1 && process.argv[tagAt + 1] !== `v${rootPkg.version}`) {
@@ -65,7 +67,7 @@ for (const name of PACKAGES) {
   }
 
   if (!existsSync(root + dir + 'LICENSE')) bad(id, 'has no LICENSE file in its folder (npm ships the one next to package.json)');
-  else if (readFileSync(root + dir + 'LICENSE', 'utf8') !== rootLicense) bad(id, 'LICENSE differs from the repo-root LICENSE');
+  else if (lf(readFileSync(root + dir + 'LICENSE', 'utf8')) !== rootLicense) bad(id, 'LICENSE text differs from the repo-root LICENSE');
   if (!existsSync(root + dir + 'README.md')) bad(id, 'has no README.md, so its npm page would be empty');
   else if (readFileSync(root + dir + 'README.md', 'utf8').length < 600) bad(id, 'README.md is a stub');
 
@@ -74,7 +76,12 @@ for (const name of PACKAGES) {
     for (const [cmd, file] of Object.entries(p.bin)) {
       const path = root + dir + file.replace(/^\.\//, '');
       if (!existsSync(path)) bad(id, `bin "${cmd}" points at ${file}, which does not exist`);
-      else if (!readFileSync(path, 'utf8').startsWith('#!')) bad(id, `bin "${cmd}" (${file}) has no #! line, so it will not run as a command`);
+      else {
+        const first = readFileSync(path, 'utf8').split('\n')[0];
+        if (!first.startsWith('#!')) bad(id, `bin "${cmd}" (${file}) has no #! line, so it will not run as a command`);
+        // `#!/usr/bin/env node\r` is looked up as the program "node\r" and fails on Linux and macOS with a baffling error.
+        else if (first.endsWith('\r')) bad(id, `bin "${cmd}" (${file}) has a CRLF line ending on its #! line; it would not run on Linux or macOS. Build with newLine "lf"`);
+      }
     }
   }
 
