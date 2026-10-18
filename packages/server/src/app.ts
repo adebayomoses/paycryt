@@ -45,6 +45,7 @@ import {
 import { AuditLogStore } from './audit.js';
 import { DashboardAssets, POS_PATH, UI_HEADERS } from './ui.js';
 import { RateLimiter } from './rate-limit.js';
+import { paymentsCsv } from './payments-csv.js';
 
 export interface ServerConfig {
   /** Bearer token clients must send. */
@@ -420,8 +421,19 @@ export class PaycrytServer {
       if (method === 'POST' && path === '/v1/payments') return send(res, 201, await this.createPayment(json, auth));
       m = /^\/v1\/payments\/([\w-]+)$/.exec(path);
       if (method === 'GET' && m) return send(res, 200, this.getPayment(m[1]!, auth));
-      if (method === 'GET' && path === '/v1/payments') {
-        return send(res, 200, this.watcher.list().filter((w) => this.canSee(auth, w.request)).map((w) => view(w)));
+      if (method === 'GET' && (path === '/v1/payments' || path === '/v1/payments.csv')) {
+        const payments = this.watcher.list().filter((w) => this.canSee(auth, w.request));
+        if (path === '/v1/payments.csv') {
+          const csv = paymentsCsv(payments, url.searchParams);
+          res.writeHead(200, {
+            'content-type': 'text/csv; charset=utf-8',
+            'content-disposition': 'attachment; filename="paycryt-payments.csv"',
+            'cache-control': 'no-store',
+            'x-content-type-options': 'nosniff',
+          });
+          return void res.end(csv);
+        }
+        return send(res, 200, payments.map((w) => view(w)));
       }
       if (method === 'GET' && path === '/v1/events') {
         return send(res, 200, this.events.filter((e) => this.canSee(auth, this.watcher.get(e.paymentId)?.request)).map(serializeEvent));

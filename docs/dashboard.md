@@ -18,6 +18,7 @@ A merchant who signs in gets an **Open POS** link to the [offline POS app](pos.m
 | | Operator (admin key) | Merchant (their own key) |
 |---|---|---|
 | See payments, status, amounts, history | all merchants | their own only |
+| Download reconciliation CSV | all merchants | their own only |
 | Create a payment, with a QR code of the deposit address and the exact amount | yes | yes |
 | Copy the address or the exact amount, see what is still owed on a part-payment | yes | yes |
 | Look up a rate, see exactly which sources set it, and verify the audit chain | yes | yes |
@@ -30,6 +31,25 @@ A merchant who signs in gets an **Open POS** link to the [offline POS app](pos.m
 A `SANDBOX` or `LIVE` badge is always on screen, with a coloured top border, so nobody mistakes fake money for real.
 
 The page works on a phone. It lists the newest 200 payments and refreshes every 4 seconds while a tab is visible.
+
+## Reconciliation CSV
+
+Choose **Download CSV** on the Payments tab to save `paycryt-payments.csv`. It includes **all payments your key can read**, regardless of the screen's status filter or 200-row display limit. A merchant gets only their own payments; the admin gets all payments. The download uses the same in-memory API key and request limits as the payment list, without putting the key in a URL or browser storage.
+
+The API is `GET /v1/payments.csv`, with the usual `Authorization: Bearer …` header. Optional `from` and `to` bounds filter the payment's **creation time**: `from` is inclusive and `to` is exclusive. Both accept a UTC date (`YYYY-MM-DD`, midnight UTC) or a UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`, optionally with one to three fractional-second digits). For example, `/v1/payments.csv?from=2026-10-01&to=2026-11-01` exports payments created during October in UTC. Invalid or impossible dates, repeated bounds and `from >= to` return a JSON error with status `400`. Omitting both bounds exports the complete accessible list.
+
+The fixed columns are:
+
+| Column | Value |
+|---|---|
+| `id`, `created`, `status` | Payment ID, creation time as an ISO UTC timestamp, and current payment status |
+| `fiat_currency`, `fiat_amount` | Currency code and exact decimal amount in major fiat units |
+| `asset`, `chain`, `amount_due`, `received` | Asset symbol, chain, exact decimal amount due and currently confirmed received amount in asset units |
+| `address`, `rate_snapshot_hash`, `note` | Deposit address, the pricing snapshot's hash, and `metadata.note` (empty when absent) |
+
+Amounts are formatted directly from `bigint` minor units using the currency or asset's decimals; no floating-point conversion or rounding is introduced. Trailing fractional zeros are trimmed. Spreadsheet programs may still round long numbers when automatically importing them, so import the amount columns as **text** when exact digits matter.
+
+The file is UTF-8, with a header, quoted cells and CRLF record endings. Embedded quotes are doubled; commas, Unicode and embedded line breaks remain inside their cell. Potential formulas in text fields are prefixed with an apostrophe, including `=`, `+`, `-` or `@` after leading whitespace/control characters and fields starting with a tab or line break. Preserve that prefix when opening the file in a spreadsheet. A range with no matching payments returns just the header. Responses use `Cache-Control: no-store`; the downloaded file itself contains payment history and should be kept with the same care as a database export.
 
 ## How it handles your API key
 
