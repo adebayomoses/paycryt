@@ -37,6 +37,11 @@ export interface EvmRpcOptions {
   lookbackBlocks?: number;
   /** `eth_getLogs` is split into ranges of at most this many blocks, for providers that cap the range. Default 2000. */
   maxBlockRange?: number;
+  /**
+   * Block timestamps are looked up with batched `eth_getBlockByNumber` calls of at most this many per request, for
+   * providers that cap batch size (many allow only 100, some fewer). Default 50. Lower it if your provider rejects batches.
+   */
+  maxBatchSize?: number;
 }
 
 interface RawLog {
@@ -66,12 +71,15 @@ export class EvmRpcChainAdapter implements ChainAdapter {
   private readonly contracts: Record<string, string>;
   private readonly lookbackBlocks: number;
   private readonly maxBlockRange: number;
+  private readonly maxBatchSize: number;
   private nextId = 0;
 
   constructor(private readonly opts: EvmRpcOptions) {
     this.chain = opts.chain;
     this.contracts = { ...defaultContractsForChain(opts.chain), ...opts.contracts };
     this.maxBlockRange = opts.maxBlockRange ?? 2_000;
+    this.maxBatchSize = opts.maxBatchSize ?? 50;
+    if (!Number.isInteger(this.maxBatchSize) || this.maxBatchSize < 1) throw new Error('EvmRpcChainAdapter: maxBatchSize must be a whole number of at least 1.');
     const lookback = opts.lookbackBlocks ?? DEFAULT_LOOKBACK_BLOCKS[opts.chain];
     if (!lookback) throw new Error(`EvmRpcChainAdapter: no default lookbackBlocks for chain "${opts.chain}"; pass one explicitly.`);
     this.lookbackBlocks = lookback;
@@ -101,13 +109,16 @@ export class EvmRpcChainAdapter implements ChainAdapter {
 
     return logs.map((l) => {
       const blockNum = parseInt(l.blockNumber, 16);
+      // Never guess. A deposit with a missing or zero time looks older than its payment request and is silently ignored.
+      const timestamp = timestamps.get(blockNum);
+      if (timestamp === undefined) throw new Error(`EvmRpcChainAdapter (${this.chain}): no timestamp for block ${blockNum}`);
       return {
         txId: l.transactionHash,
         address,
         assetSymbol,
         amount: BigInt(l.data),
         confirmations: Math.max(0, currentBlock - blockNum + 1),
-        receivedAt: (timestamps.get(blockNum) ?? 0) * 1000,
+        receivedAt: timestamp * 1000,
       };
     });
   }
@@ -129,19 +140,47 @@ export class EvmRpcChainAdapter implements ChainAdapter {
   }
 
   /** One batched JSON-RPC request for every distinct block, instead of one round trip per log. */
+  /**
+   * Timestamps for the blocks that hold deposits, looked up in batches of at most `maxBatchSize`. Providers cap batch
+   * size, and a deposit address can be sprayed with dust transfers across many blocks to push a single batch over the
+   * cap, which would stop a real payment from being confirmed. Every block must come back with a usable timestamp:
+   * anything short of a complete answer is an error (retried on the next poll), never a guess.
+   */
   private async blockTimestamps(blockNumbers: number[]): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    for (let i = 0; i < blockNumbers.length; i += this.maxBatchSize) {
+      for (const [block, timestamp] of await this.timestampBatch(blockNumbers.slice(i, i + this.maxBatchSize))) out.set(block, timestamp);
+    }
+    return out;
+  }
+
+  private async timestampBatch(blockNumbers: number[]): Promise<Map<number, number>> {
     const batch = blockNumbers.map((n) => ({ jsonrpc: '2.0', id: ++this.nextId, method: 'eth_getBlockByNumber', params: [`0x${n.toString(16)}`, false] }));
     const res = await this.opts.fetch(this.opts.rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(batch) });
     if (!res.ok) throw new Error(`EVM RPC batch block lookup failed: HTTP ${res.status}`);
-    const results = (await res.json()) as Array<{ id: number; result?: { timestamp: string }; error?: { message: string } }>;
-    const blockById = new Map(batch.map((b, i) => [b.id, blockNumbers[i]!]));
-    const out = new Map<number, number>();
-    for (const r of results) {
-      const blockNum = blockById.get(r.id);
-      if (blockNum === undefined) continue;
-      if (r.error) throw new Error(`EVM RPC eth_getBlockByNumber failed: ${r.error.message}`);
-      out.set(blockNum, parseInt(r.result!.timestamp, 16));
+    const reply = (await res.json()) as unknown;
+    if (!Array.isArray(reply)) {
+      // JSON-RPC lets a server refuse a whole batch with ONE error object, typically because it is too large.
+      const err = (reply as { error?: { message?: string; code?: number } } | null)?.error;
+      const why = err ? `: ${err.message ?? 'unknown error'}${err.code !== undefined ? ` (code ${err.code})` : ''}` : ' with an unexpected reply';
+      throw new Error(`EVM RPC rejected a batch of ${batch.length} eth_getBlockByNumber calls${why}. If the provider limits batch size, lower maxBatchSize.`);
     }
+    // Match answers to requests by id: JSON-RPC does not promise the replies come back in order.
+    const answers = new Map<number, { result?: { timestamp?: string } | null; error?: { message: string } }>();
+    for (const r of reply as Array<{ id?: unknown; result?: { timestamp?: string } | null; error?: { message: string } }>) {
+      if (r && typeof r.id === 'number') answers.set(r.id, r);
+    }
+    const out = new Map<number, number>();
+    batch.forEach((call, i) => {
+      const block = blockNumbers[i]!;
+      const answer = answers.get(call.id);
+      if (!answer) throw new Error(`EVM RPC batch reply has no answer for block ${block}`);
+      if (answer.error) throw new Error(`EVM RPC eth_getBlockByNumber failed: ${answer.error.message}`);
+      if (!answer.result) throw new Error(`EVM RPC does not know block ${block} yet (the node may be behind); it will be retried on the next poll`);
+      const timestamp = Number.parseInt(answer.result.timestamp ?? '', 16);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error(`EVM RPC returned no usable timestamp for block ${block}`);
+      out.set(block, timestamp);
+    });
     return out;
   }
 

@@ -47,6 +47,8 @@ Any other chain name needs `lookbackBlocks` passed explicitly — the adapter re
 
 Many providers cap how many blocks `eth_getLogs` can span in one call (a few thousand on free tiers). `maxBlockRange` (default 2000) splits the lookback window into chunks automatically, run sequentially. Tune it to your provider's limit — a paid Alchemy/Infura plan can usually take one large call (`maxBlockRange: 50_000`+); a shared public RPC may need chunks under 2,000.
 
+Block timestamps are looked up separately, with batched `eth_getBlockByNumber` calls, and providers cap batch size too (100 is common). `maxBatchSize` (default 50) splits that lookup into chunks. Every deposit must come back with a real timestamp: if a provider rejects a batch, omits an answer, or does not know a block yet, `getDeposits` throws with a message saying which, and the payment is retried on the next poll. It never guesses, because a deposit stamped with a missing or zero time would look older than its payment request and be silently ignored, leaving a customer who paid in full shown as unpaid. If your provider answers with a batch-size error, lower `maxBatchSize`.
+
 ## Known limitations
 
 - **No pagination beyond chunking** — for a freshly generated one-time deposit address this is a non-issue.
