@@ -25,6 +25,7 @@ const state = {
   loading: false,
 };
 let pollTimer = null;
+let sessionGeneration = 0;
 
 const CHAIN_NAMES = { tron: 'Tron (TRC20)', ethereum: 'Ethereum (ERC20)', bsc: 'BNB Chain (BEP20)', base: 'Base', bitcoin: 'Bitcoin' };
 const SCENARIOS = [
@@ -201,6 +202,7 @@ async function signIn(key) {
     const e = new ApiError(401, 'Enter an API key');
     throw e;
   }
+  sessionGeneration += 1;
   state.key = key;
   try {
     state.me = await api('GET', '/v1/me', undefined, { keepSession: true });
@@ -216,6 +218,7 @@ async function signIn(key) {
 }
 
 function signOut(message) {
+  sessionGeneration += 1;
   state.key = null;
   state.me = null;
   state.role = null;
@@ -298,6 +301,46 @@ function stopPolling() {
 
 // ------------------------------------------------------------------ payments
 
+async function downloadPayments(button) {
+  const generation = sessionGeneration;
+  const key = state.key;
+  const current = () => generation === sessionGeneration && key === state.key;
+  if (!key || button.disabled) return;
+  button.disabled = true;
+  try {
+    const res = await fetch('/v1/payments.csv', {
+      headers: { authorization: `Bearer ${key}` }, cache: 'no-store', redirect: 'error',
+    });
+    if (!current()) return;
+    if (!res.ok) {
+      let data;
+      try { data = await res.json(); } catch { /* a non-JSON error still has a status */ }
+      if (!current()) return;
+      if (res.status === 401) {
+        signOut('That API key was rejected. Please sign in again.');
+        return;
+      }
+      const retry = res.headers.get('retry-after');
+      throw new Error(res.status === 429 ? `Too many requests. Try again in ${retry ?? 'a few'} seconds.` : data?.error || `Download failed (${res.status}).`);
+    }
+    if (!/^text\/csv(?:;|$)/i.test(res.headers.get('content-type') ?? '')) throw new Error('The server did not return a CSV file.');
+    const blob = await res.blob();
+    if (!current()) return;
+    const url = URL.createObjectURL(blob);
+    const link = h('a', { href: url, download: 'paycryt-payments.csv' });
+    document.body.append(link);
+    try { link.click(); } finally {
+      link.remove();
+      // Give the browser time to consume the download before releasing its temporary URL.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  } catch (err) {
+    if (current()) toast(err.message || 'Could not download payments.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function viewPayments() {
   const filter = h(
     'select',
@@ -307,7 +350,9 @@ function viewPayments() {
   const list = h(
     'section',
     { class: 'card stack' },
-    h('div', { class: 'row' }, h('h2', {}, 'Payments'), h('span', { class: 'muted small', id: 'count' }), h('span', { class: 'grow' }), filter, h('button', { class: 'btn small', type: 'button', onclick: () => loadPayments() }, 'Refresh')),
+    h('div', { class: 'row' }, h('h2', {}, 'Payments'), h('span', { class: 'muted small', id: 'count' }), h('span', { class: 'grow' }), filter,
+      h('button', { class: 'btn small', type: 'button', title: 'Download all accessible payments, regardless of the screen filter or 200-row limit.', onclick: (e) => downloadPayments(e.currentTarget) }, 'Download CSV'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => loadPayments() }, 'Refresh')),
     h('div', { class: 'table-wrap' },
       h('table', { class: 'table' },
         h('thead', {}, h('tr', {}, ['Status', 'Amount', 'Due', 'Received', 'Payment'].map((c, i) => h('th', { scope: 'col', class: i >= 3 ? 'hide-sm' : '' }, c)))),
